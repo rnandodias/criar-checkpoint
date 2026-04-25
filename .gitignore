@@ -1,0 +1,38 @@
+# Ambiente
+.env
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# IDEs / SO
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Claude Code (estado local; settings.json compartilhado fica versionado)
+.claude/scheduled_tasks.lock
+.claude/settings.local.json
+.claude/projects/
+
+# Artefatos gerados (manter as pastas, ignorar conteúdo)
+trilha/*.json
+output/checkpoints/*.json
+output/checkpoints/*.jsonl
+output/cursos_checkpoint/*.txt
+output/cursos_checkpoint/*.md
+output/cursos_checkpoint/*.json
+
+# Manter as pastas no repositório
+!trilha/.gitkeep
+!output/checkpoints/.gitkeep
+!output/cursos_checkpoint/.gitkeep

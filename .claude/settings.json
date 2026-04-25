@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python scripts/obter_transcricoes_cursos.py:*)",
+      "Bash(python scripts/checkpoint_criar_resumos_cursos.py:*)",
+      "Bash(python scripts/gerar_prova_teorica_do_zero.py:*)",
+      "Bash(python scripts/gerar_prova_pratica_do_zero.py:*)",
+      "Bash(python -m venv:*)",
+      "Bash(.venv/Scripts/python scripts/obter_transcricoes_cursos.py:*)",
+      "Bash(.venv/Scripts/python scripts/checkpoint_criar_resumos_cursos.py:*)",
+      "Bash(.venv/Scripts/python scripts/gerar_prova_teorica_do_zero.py:*)",
+      "Bash(.venv/Scripts/python scripts/gerar_prova_pratica_do_zero.py:*)",
+      "Bash(pip install:*)",
+      "Bash(pip list:*)",
+      "Bash(pip show:*)",
+      "Bash(.venv/Scripts/pip install:*)",
+      "Bash(.venv/Scripts/pip list:*)",
+      "Bash(playwright install:*)",
+      "Bash(.venv/Scripts/playwright install:*)"
+    ]
+  }
+}
