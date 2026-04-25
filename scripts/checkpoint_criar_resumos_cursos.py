@@ -24,6 +24,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from dotenv import load_dotenv
 from openai import OpenAI
+from anthropic import Anthropic
 
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -73,10 +74,37 @@ INPUT_FILES = [
 # Autenticação
 # =========================
 load_dotenv()
-api_key = os.getenv("OPENAI_CREDENTIALS")
-if not api_key:
-    raise RuntimeError("Defina OPENAI_CREDENTIALS no .env ou no ambiente.")
-client = OpenAI(api_key=api_key)
+
+# Clients lazy (instanciados apenas quando o provider correspondente é usado)
+_openai_client: Optional[OpenAI] = None
+_anthropic_client: Optional[Anthropic] = None
+
+
+def _get_openai_client() -> OpenAI:
+    global _openai_client
+    if _openai_client is None:
+        key = os.getenv("OPENAI_CREDENTIALS")
+        if not key:
+            raise RuntimeError("Defina OPENAI_CREDENTIALS no .env para usar modelos OpenAI.")
+        _openai_client = OpenAI(api_key=key)
+    return _openai_client
+
+
+def _get_anthropic_client() -> Anthropic:
+    global _anthropic_client
+    if _anthropic_client is None:
+        key = os.getenv("ANTHROPIC_API_KEY")
+        if not key:
+            raise RuntimeError("Defina ANTHROPIC_API_KEY no .env para usar modelos Claude.")
+        _anthropic_client = Anthropic(api_key=key)
+    return _anthropic_client
+
+
+def _provider_for(model: str) -> str:
+    m = (model or "").lower()
+    if m.startswith("claude") or m.startswith("anthropic"):
+        return "anthropic"
+    return "openai"
 
 # =========================
 # Prompts (detalhados, sem exercícios)
@@ -302,13 +330,31 @@ def _model_supports_temperature(model: str) -> bool:
     return not (m.startswith("gpt-5") or m.startswith("o1") or m.startswith("o3") or m.startswith("o4"))
 
 
+def _split_system_user(messages: List[Dict[str, str]]) -> tuple:
+    """Anthropic recebe `system` separado dos `messages`. Extrai e retorna (system_str, user_messages)."""
+    system_parts = [m["content"] for m in messages if m.get("role") == "system"]
+    others = [m for m in messages if m.get("role") != "system"]
+    return ("\n\n".join(system_parts), others)
+
+
 def call_chat(messages: List[Dict[str, str]], *, retries: int = 3, backoff: float = 2.0) -> str:
-    kwargs: Dict[str, Any] = {"model": MODEL, "messages": messages}
-    if _model_supports_temperature(MODEL):
-        kwargs["temperature"] = TEMPERATURE
+    provider = _provider_for(MODEL)
     for attempt in range(retries):
         try:
-            resp = client.chat.completions.create(**kwargs)
+            if provider == "anthropic":
+                system, user_msgs = _split_system_user(messages)
+                resp = _get_anthropic_client().messages.create(
+                    model=MODEL,
+                    max_tokens=8192,
+                    system=system,
+                    messages=user_msgs,
+                    temperature=TEMPERATURE,
+                )
+                return "".join(b.text for b in resp.content if hasattr(b, "text"))
+            kwargs: Dict[str, Any] = {"model": MODEL, "messages": messages}
+            if _model_supports_temperature(MODEL):
+                kwargs["temperature"] = TEMPERATURE
+            resp = _get_openai_client().chat.completions.create(**kwargs)
             return resp.choices[0].message.content or ""
         except Exception as e:
             if attempt == retries - 1:

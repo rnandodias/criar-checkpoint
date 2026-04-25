@@ -49,6 +49,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from dotenv import load_dotenv
 from openai import OpenAI
+from anthropic import Anthropic
 
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -378,14 +379,57 @@ def _model_supports_temperature(model: str) -> bool:
     return not (m.startswith("gpt-5") or m.startswith("o1") or m.startswith("o3") or m.startswith("o4"))
 
 
-def _chat(client: OpenAI, model: str, system: str, user: str) -> str:
+def _provider_for(model: str) -> str:
+    m = (model or "").lower()
+    if m.startswith("claude") or m.startswith("anthropic"):
+        return "anthropic"
+    return "openai"
+
+
+_openai_client: Optional[OpenAI] = None
+_anthropic_client: Optional[Anthropic] = None
+
+
+def _get_openai_client() -> OpenAI:
+    global _openai_client
+    if _openai_client is None:
+        key = os.getenv("OPENAI_CREDENTIALS")
+        if not key:
+            raise RuntimeError("Defina OPENAI_CREDENTIALS no .env para usar modelos OpenAI.")
+        _openai_client = OpenAI(api_key=key)
+    return _openai_client
+
+
+def _get_anthropic_client() -> Anthropic:
+    global _anthropic_client
+    if _anthropic_client is None:
+        key = os.getenv("ANTHROPIC_API_KEY")
+        if not key:
+            raise RuntimeError("Defina ANTHROPIC_API_KEY no .env para usar modelos Claude.")
+        _anthropic_client = Anthropic(api_key=key)
+    return _anthropic_client
+
+
+def _chat(client: Any, model: str, system: str, user: str) -> str:
+    """Roteia para OpenAI ou Anthropic com base no prefixo do `model`.
+    O parâmetro `client` é mantido por compatibilidade com chamadas existentes,
+    mas é ignorado — os clients são lazy/cacheados internamente."""
+    if _provider_for(model) == "anthropic":
+        resp = _get_anthropic_client().messages.create(
+            model=model,
+            max_tokens=8192,
+            system=system,
+            messages=[{"role": "user", "content": user}],
+            temperature=TEMP,
+        )
+        return "".join(b.text for b in resp.content if hasattr(b, "text"))
     kwargs: Dict[str, Any] = {
         "model": model,
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
     }
     if _model_supports_temperature(model):
         kwargs["temperature"] = TEMP
-    resp = client.chat.completions.create(**kwargs)
+    resp = _get_openai_client().chat.completions.create(**kwargs)
     return resp.choices[0].message.content or ""
 
 # =========================
@@ -619,10 +663,8 @@ def gerar_aula3_txt(
     t_start = time.perf_counter()
 
     load_dotenv()
-    api_key = os.getenv("OPENAI_CREDENTIALS")
-    if not api_key:
-        raise RuntimeError("Defina OPENAI_CREDENTIALS no .env ou no ambiente.")
-    client = OpenAI(api_key=api_key)
+    # Clients OpenAI/Anthropic são lazy — instanciados em _chat() conforme o MODEL.
+    client = None
 
     # Fase 1 — Preparar insumos
     print("Fase 1/4: Preparando insumos...")
