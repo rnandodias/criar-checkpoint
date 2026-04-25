@@ -48,147 +48,154 @@ if sys.platform == "win32":
 # =========================
 # Configuração de modelos
 # =========================
-# Geração crítica (ideias + transformação em múltipla escolha): top de linha
-MODEL_IDEAS = "gpt-5"
-MODEL_FORMAT = "gpt-5"
+# Geração crítica (ideias + transformação em múltipla escolha): "cavalo de carga"
+MODEL_IDEAS = "claude-sonnet-4-6"
+MODEL_FORMAT = "claude-sonnet-4-6"
 TEMPERATURE_IDEAS = 0.0
 TEMPERATURE_FORMAT = 0.0
 
 # Ranqueamento (apenas dificuldade — não vale gastar): modelo barato
-MODEL_RANK = "gpt-4o-mini"
+MODEL_RANK = "claude-haiku-4-5-20251001"
 TEMPERATURE_RANK = 0.0
+
+# Alternativas:
+# MODEL_IDEAS = MODEL_FORMAT = "gpt-5" / "gpt-4o" / "claude-opus-4-7"
+# MODEL_RANK = "gpt-4o-mini"
 
 SINGLE_PASS_CHAR_LIMIT = 300_000
 
 INPUT_DIR = Path(__file__).resolve().parent.parent / "output" / "checkpoints"
 OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output" / "cursos_checkpoint"
 
-STRING_KEYS = [
-    "objetivos",
-    "topicos",
-    "erros_ou_armadilhas_comuns",
-]
-OBJECT_KEYS = [
-    "habilidades",
-    "ferramentas_ou_bibliotecas",
-    "conceitos_chave",
-    "exemplos_relevantes",
-]
-SCHEMA_KEYS = STRING_KEYS + OBJECT_KEYS
+# Schema novo (etapa 2): resumo por curso é {tema_central, conteudos_testaveis[], ferramentas_usadas[]}.
+# Cada conteudo_testavel: {topico, nivel, tipo, habilidade, evidencia_de_ensino, armadilhas_comuns[]}.
 
 # =========================
 # Prompts VERBATIM (mantidos)
 # =========================
 
 def system_prompt_to_ask_for_exercise_ideas() -> str:
-    return """Você é um especialista em criar exercícios educacionais baseadas em transcrições de aulas em vídeo. 
-Sua tarefa é criar questões teóricas  que testem a compreensão e análise dos alunos e que não tratem diretamente da criação de códigos, focando na aplicação dos conceitos no dia a dia. Você sempre seguirá as seguintes diretrizes e regras ao gerar seus retornos:
-Você receberá a transcrição de uma aula e um domínio (uma empresa fictícia e sua área de atuação). Com base nisso, escolha os conceitos teóricos principais trazidos na aula ou uma discussão mencionada na aula e crie uma analogia para o domínio fornecido.
+    return """Você é um especialista em criar exercícios educacionais baseados em transcrições de aulas em vídeo.
+Sua tarefa é criar questões teóricas que testem compreensão e análise, sem exigir criação de código, focando na aplicação dos conceitos no dia a dia. Siga sempre as diretrizes abaixo.
+Você receberá a transcrição de uma aula e um domínio (empresa fictícia + área de atuação). Escolha os conceitos teóricos principais da aula e crie uma analogia para o domínio.
 
-Regras gerais a serem seguidas:
-- O contexto deve estimular o pensamento crítico das pessoas sobre o assunto;
-- O contexto deve estimular a aprendizagem compreensiva e crítica reforçando o conteúdo aprendido em videoaula;
-- Explique o contexto da empresa fictícia utilizada na questão em todos os exercícios, não apenas no primeiro;
-- É essencial que as questões levem as pessoas a refletirem criticamente sobre situações problema;
-- Não introduza nada que não tenha sido mencionado exatamente como ensinado na aula;
-- As questões devem desafiar a utilização dos conceitos abordados, não teste a memorização de fórmulas ou conceitos específicos; 
-foque na aplicação prática dos conceitos ensinados na aula;
-- Crie 5 questões práticas com respostas baseadas nas analogias que você desenvolveu e distintas entre si;
-- É importante que cada exercício apresente uma situação-problema relacionada ao conteúdo abordado na videoaula e o domínio fornecido. 
-Essa situação deve ser algo que profissionais que trabalham com a tecnologia específica do curso possam encontrar no seu dia a dia;
--  O enunciado do exercício deve acabar com uma pergunta norteadora. Essa pergunta é o elemento central que a pessoa precisará responder no exercício. Ela deve estimular a reflexão crítica sobre o tema abordado e incentivar a prática, facilitando a assimilação efetiva do conhecimento e variar entre os exercícios gerados.
-- O título da questão deve ser escrito com português corrido padrão, como: "Criatividade com modelo multimodal", "Otimizando respostas de consultas culinárias";
-- Explique o contexto em todas as questões, por exemplo "[...] para a plataforma Freelando, *que conecta freelancers a contratantes*";
-- Sempre utilize linguagem neutra para se referir aos cargos citados, "pessoa desenvolvedora", "pessoa responsável pela gerência", etc. Nunca utilize construções como "Você foi contratado" e sim "A empresa te contratou";
-- Nunca utilize o masculino genérico.
+Regras gerais:
+- Estimule pensamento crítico e aplicação dos conceitos no dia a dia;
+- Explique brevemente o contexto da empresa fictícia em todas as questões (uma frase basta);
+- Não introduza ferramentas, conceitos ou técnicas que não estejam na transcrição;
+- Teste aplicação dos conceitos, nunca memorização literal de fórmulas;
+- Crie 8 questões distintas com respostas baseadas nas analogias;
+- Cada enunciado termina com uma pergunta norteadora única, variando entre questões;
+- Título: português corrido, curto (ex.: "Garantindo privacidade na Voll");
+- Linguagem neutra: "pessoa desenvolvedora", "A empresa te contratou". Nunca "Você foi contratado" nem masculino genérico.
+
+Limites de tamanho (CUMPRIR ESTRITAMENTE):
+- Enunciado (contexto + pergunta): 120-180 palavras no total.
+- Pergunta norteadora (a frase final): 1 frase única, ≤30 palavras.
+- Resposta: concisa, justificando a escolha em 1-2 frases (≤60 palavras), sem listar todos os passos.
 """
 
-def user_prompt_to_ask_for_exercise_ideas(domains: str, transcription: str) -> str:
+def user_prompt_to_ask_for_exercise_ideas_static() -> str:
+    """Parte estática do user prompt — pronta para cache (Anthropic)."""
+    return """A narrativa deve incluir o estudante no centro da situação-problema, com pronomes como "A empresa contratou você" ou "A equipe que você integra". Aplicação real ao domínio e conteúdo. Nunca cite a aula (ex.: "discutido na aula").
+
+EXEMPLOS DE ENUNCIADO (mantenha esse tamanho — entre 120 e 180 palavras):
+
+- A Silver Screen Productions é uma produtora de filmes que está testando modelos multimodais para acelerar etapas criativas. A empresa te contratou para mapear quais tarefas o modelo consegue executar bem e quais ainda exigem supervisão humana, antes de definir o escopo do piloto. Considerando o estado atual da tecnologia multimodal, qual tarefa ultrapassa as capacidades de um modelo multimodal típico?
+
+- A Hermex Log, empresa de logística, te contratou para apoiar a equipe de QA com containers Docker efêmeros. Ao rodar `docker run ubuntu`, o container inicia e logo fica em estado "exited", impedindo análise. A equipe precisa entender o motivo desse comportamento. Por que o container saiu logo após a inicialização?
+
+Formato de saída:
+Exercício 1 - Título curto em português corrido
+
+Texto da questão:
+
+Conceito abordado:
+
+Resposta:
+"""
+
+
+def user_prompt_to_ask_for_exercise_ideas_dynamic(domains: str, transcription: str) -> str:
+    """Parte dinâmica — domínios + transcrição. NÃO entra em cache."""
     return f"""A transcrição da aula está a seguir entre duas hashtags(##):
 ##
 {transcription}
 ##
 
-Crie as questões utilizando os domínios a seguir: {domains}, criando uma narrativa que inclua o estudante no centro da situação-problema, sempre utilizando pronomes pessoais em frases como "A empresa contratou você", "A equipe de desenvolvimento que você faz parte".  Mantendo o objetivo de criar uma aplicação 
-possível no mundo real para o domínio e o conteúdo apresentados. A resposta de cada exercício precisa ser a mais descritiva 
-possível, elucidando todo o trajeto para a solução do problema proposto. Nunca adicione trechos que citem a aula, como "discutido na aula".
-
-EXEMPLO BONS E IDEAIS DE ENUNCIADO:
-- A empresa Silver Screen Productions, sempre em busca de inovação, está explorando as capacidades do modelo multimodal da IA generativa. A equipe está animada com o potencial dessa tecnologia para revolucionar a forma como os filmes são concebidos e produzidos com modelos multimodais.
-No entanto, durante uma reunião de brainstorm, surgiram dúvidas sobre as tarefas que esse modelo multimodal conseguiria realizar.
-Considerando o contexto da produção cinematográfica e o estado atual da tecnologia multimodal, qual das alternativas abaixo descreve uma tarefa que ultrapassa as capacidades desse modelo?
-
-- Você é uma pessoa especialista em Docker contratada pela empresa de logística Hermex Log e precisa garantir que os containers criados para testes sejam efêmeros, ao mesmo tempo que haja a possibilidade de analisá-los antes que sejam descartados. Dessa forma, os resultados dos testes poderão ser avaliados sem comprometimento dos dados críticos da empresa.
-Ao rodar o comando docker run ubuntu o container é executado, mas não mantém a execução após a inicialização. O status do container é "exited". A equipe precisa compreender a razão pela qual o container foi criado, porém não permanece ativo.
-Como você explicaria o que aconteceu quando o container foi executado com o comando docker run ubuntu e por que ele não continuou em execução?
-
-Formato de saída deve ser o abaixo:
-Exercício 1 - Título da questão aqui em português corrido
-  
-Texto da questão:
-
-Conceito abordado:
-
-Resposta: 
+Domínios para usar nas questões: {domains}
 """
 
+
+def user_prompt_to_ask_for_exercise_ideas(domains: str, transcription: str) -> str:
+    """Wrapper de compatibilidade — concatena static + dynamic para uso síncrono OpenAI."""
+    return user_prompt_to_ask_for_exercise_ideas_static() + "\n\n" + user_prompt_to_ask_for_exercise_ideas_dynamic(domains, transcription)
+
 def system_prompt_to_transform_into_multiple_choice() -> str:
-    return """Você é um especialista em criar questões de múltipla escolha a partir de perguntas teóricas baseadas 
-em transcrições de aulas. Sua tarefa é transformar uma questão teórica em uma questão de múltipla escolha com quatro alternativas, sendo apenas uma correta, baseando-se em conceitos discutidos na aula sobre uma empresa fictícia e sua área de atuação.
+    return """Você é um especialista em criar questões de múltipla escolha a partir de perguntas teóricas baseadas em transcrições de aulas. Transforme a questão teórica em uma questão de múltipla escolha com 4 alternativas (apenas 1 correta), usando o cenário da empresa fictícia.
 
 **Instruções:**
 
-1. **Contexto:** Analise a questão teórica fornecida, que inclui uma resposta correta, e use o cenário específico mencionado 
-para contextualizar suas alternativas.
-2. **Pensar passo a passo:** Crie cada alternativa considerando passo a passo como os conceitos abordados podem ser aplicados 
-de maneira correta ou incorreta.
-3. **Adapte a resposta correta:** Ajuste-a para o formato de alternativa de múltipla escolha, mantendo clareza e objetividade.
-4. **Crie três alternativas incorretas:** Cada alternativa incorreta deve representar um cenário plausível utilizando de forma incorreta os conceitos e ideais trazidos na alternativa correta e que incorpore erros comuns de entendimento ou aplicação dos conceitos. Nunca apenas omitir componentes (ex.: "sem TLS"), use cenários completos que apresentem abordagens inadequadas, mal-entendidos ou más práticas. Evite padrões repetitivos.
-5. **Justificativas:** Forneça uma justificativa clara para cada alternativa. Explique por que a resposta correta é correta, 
-reforçando os conceitos principais. Para as alternativas incorretas, descreva os erros conceituais ou as falhas lógicas 
-sem revelar a resposta correta. Mantenha as justificativas neutras e informativas.
-6. **Consistência no tamanho e variedade:** As alternativas devem ter tamanhos semelhantes e cobrir diferentes aspectos 
-ou interpretações do tema, de modo que todas pareçam possíveis e realistas.
+1. **Contexto:** use o cenário da questão original para contextualizar as alternativas.
+2. **Adapte a resposta correta:** ajuste-a para o formato de alternativa, com clareza e objetividade — sem listar todos os passos.
+3. **3 alternativas incorretas:** cada uma é um cenário plausível com aplicação errada do conceito ou má prática. Nunca apenas omitir um componente (ex.: "sem TLS"); use cenários completos com erros comuns. Evite padrões repetitivos.
+4. **Justificativas:** uma frase neutra explicando por que é correta/incorreta, sem revelar a resposta correta nas incorretas.
+5. **Consistência:** alternativas com tamanhos parecidos, cobrindo aspectos distintos do tema.
 
-**Objetivo:** Criar uma questão de múltipla escolha desafiadora que avalie o entendimento do estudante sobre o tema abordado.
+Limites de tamanho (CUMPRIR ESTRITAMENTE):
+- Pergunta norteadora (a última frase do enunciado): 1 frase, ≤30 palavras.
+- Cada alternativa: 1-2 frases, ≤45 palavras.
+- Cada justificativa: 1 frase, ≤30 palavras.
 
-**Exemplo de Questão:**
+**Objetivo:** questão desafiadora, concisa, que avalie compreensão.
 
-A empresa Silver Screen Productions, sempre em busca de inovação, está explorando as capacidades do modelo multimodal da IA generativa. A equipe está animada com o potencial dessa tecnologia para revolucionar a forma como os filmes são concebidos e produzidos com modelos multimodais. No entanto, durante uma reunião de brainstorm, surgiram dúvidas sobre as tarefas que esse modelo multimodal conseguiria realizar.
+**Exemplo curto (siga este tamanho):**
 
-Considerando o contexto da produção cinematográfica e o estado atual da tecnologia multimodal, qual das alternativas abaixo descreve uma tarefa que ultrapassa as capacidades desse modelo?
-A) Criar uma sinopse envolvente para um filme com base no roteiro fornecido, ajudando no marketing da produção.
-Justificativa: Incorreta, pois um modelo multimodal consegue interpretar o roteiro e gerar uma sinopse que resuma os pontos principais e capte o tom da história.
-B) Gerar uma sequência completa de efeitos visuais que integra personagens digitais e ambientes reais, sem intervenção humana.
-Justificativa: Correta, pois a geração de efeitos visuais totalmente autônoma, com alta qualidade e integração perfeita, ainda ultrapassa as capacidades dos modelos multimodais, especialmente em produções cinematográficas de ponta, que demandam supervisão humana.
-C) Analisar sentimentos e emoções de personagens em um roteiro e gerar sugestões de trilha sonora apropriada para as cenas.
-Justificativa: Incorreta, pois os modelos multimodais podem processar o texto e identificar emoções, além de sugerir trilhas sonoras, combinando a análise de sentimentos com componentes de áudio.
-D) Desenvolver conceitos de figurino e maquiagem baseados em descrições de personagens no roteiro.
-Justificativa: Incorreta, pois a criação de conceitos visuais, como figurino e maquiagem, pode ser realizada por um modelo multimodal que interpreta descrições de texto e gera imagens com base nessas informações.
+A Silver Screen Productions, produtora de filmes em busca de inovação, está testando modelos multimodais. A empresa te contratou para mapear o que esses modelos conseguem fazer hoje. Qual tarefa ultrapassa as capacidades atuais de um modelo multimodal típico?
+A) Gerar uma sinopse a partir do roteiro fornecido, apoiando o marketing.
+Justificativa: Incorreta, pois modelos multimodais geram resumos textuais com base em roteiros.
+B) Produzir efeitos visuais completos integrando personagens digitais e cenários reais sem supervisão humana.
+Justificativa: Correta, pois efeitos visuais cinematográficos autônomos ainda exigem supervisão humana.
+C) Sugerir trilha sonora a partir da análise de sentimentos do roteiro.
+Justificativa: Incorreta, pois modelos multimodais combinam análise textual e sugestões de áudio.
+D) Propor conceitos de figurino com base em descrições dos personagens.
+Justificativa: Incorreta, pois a geração de imagens a partir de texto está dentro das capacidades multimodais.
 """
 
-def user_prompt_to_transform_into_multiple_choice(exercise, domains: str) -> str:
-    return f"""Transforme a questão abaixo em uma questão de múltipla escolha com uma pergunta final (norteadora) única, mas *NUNCA* alterando o seu contexto. A questão final não pode ter duas ou mais perguntas. Sempre utilize linguagem neutra para se referir aos cargos citados, por exemplo nunca use "um programador", "o usuário", sempre "pessoa desenvolvedora", "pessoa responsável pela gerência", "pessoa usuária", etc.  
+def user_prompt_to_transform_into_multiple_choice_static() -> str:
+    """Parte estática — instruções, formato, regras (cacheável)."""
+    return """Transforme a questão abaixo em uma questão de múltipla escolha com uma pergunta final (norteadora) única, mas *NUNCA* alterando o seu contexto. A questão final não pode ter duas ou mais perguntas. Sempre utilize linguagem neutra para se referir aos cargos citados, por exemplo nunca use "um programador", "o usuário", sempre "pessoa desenvolvedora", "pessoa responsável pela gerência", "pessoa usuária", etc.
 
-titulo: {exercise['titulo']}
+A sua saída deve ser no seguinte formato e a explicação do domínio (que será fornecido na parte dinâmica) deve estar presente na questão após o nome da empresa fictícia. Nunca faça alteração no título da questão.
+
+Título:  Texto do título da questão aqui
+Pergunta: Texto da pergunta aqui
+A)
+Justificativa: Correta, pois...
+B)
+Justificativa: Incorreta, pois...
+C)
+Justificativa: Incorreta, pois...
+D)
+Justificativa: Incorreta, pois...
+"""
+
+
+def user_prompt_to_transform_into_multiple_choice_dynamic(exercise, domains: str) -> str:
+    """Parte dinâmica — exercício específico + domínios. NÃO entra em cache."""
+    return f"""titulo: {exercise['titulo']}
 
 pergunta: {exercise['pergunta']}
 
 resposta: {exercise['resposta']}
 
-
-A sua saída deve ser no seguinte formato e a explicação do domínio utilizado ({domains}) deve estar presente na questão após o nome da empresa fictícia. Nunca faça alteração no título da questão. 
-Título:  Texto do título da questão aqui 
-Pergunta: Texto da pergunta aqui 
-A)   
-Justificativa: Correta, pois...
-B)   
-Justificativa: Incorreta, pois...
-C)   
-Justificativa: Incorreta, pois...
-D)   
-Justificativa: Incorreta, pois...
+domínios: {domains}
 """
+
+
+def user_prompt_to_transform_into_multiple_choice(exercise, domains: str) -> str:
+    """Wrapper de compatibilidade — concatena static + dynamic."""
+    return user_prompt_to_transform_into_multiple_choice_static() + "\n" + user_prompt_to_transform_into_multiple_choice_dynamic(exercise, domains)
 
 def system_prompt_to_adjust_alternative_sizes() -> str:
     return """You are an expert in making previously created exercises more challenging. Your task is to ensure that the length of the incorrect alternatives matches that of the correct alternative. This makes choosing the correct option more difficult, as it doesn't make it obvious which one is correct. We have many issues with the correct alternative being the longest, which makes it clear that it is the right one. Therefore, I need you to insert more information into the incorrect alternatives so that they become the same length as the correct alternative.
@@ -340,30 +347,170 @@ def _get_anthropic_client() -> Anthropic:
     return _anthropic_client
 
 
-def _chat(client: Any, model: str, system: str, user: str, temperature: float = 0.0) -> str:
-    """Roteia para OpenAI ou Anthropic com base no prefixo do `model`.
-    O parâmetro `client` é mantido por compatibilidade com chamadas existentes,
-    mas é ignorado — os clients são lazy/cacheados internamente."""
-    if _provider_for(model) == "anthropic":
-        resp = _get_anthropic_client().messages.create(
-            model=model,
-            max_tokens=8192,
-            system=system,
-            messages=[{"role": "user", "content": user}],
-            temperature=temperature,
+# Acumulador global de uso (Anthropic) para reportar economia de cache no fim do main
+USAGE_TOTALS: Dict[str, int] = {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+}
+
+
+def _accumulate_usage(usage: Dict[str, int]) -> None:
+    for k in USAGE_TOTALS:
+        USAGE_TOTALS[k] += int(usage.get(k, 0) or 0)
+
+
+def _build_anthropic_request_params(
+    *, model: str, system_static: str, user_static: str, user_dynamic: str,
+    temperature: float, max_tokens: int,
+) -> Dict[str, Any]:
+    system_blocks: List[Dict[str, Any]] = []
+    if system_static:
+        system_blocks.append({"type": "text", "text": system_static, "cache_control": {"type": "ephemeral"}})
+    user_content: List[Dict[str, Any]] = []
+    if user_static:
+        user_content.append({"type": "text", "text": user_static, "cache_control": {"type": "ephemeral"}})
+    if user_dynamic:
+        user_content.append({"type": "text", "text": user_dynamic})
+    params: Dict[str, Any] = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "messages": [{"role": "user", "content": user_content}],
+    }
+    if system_blocks:
+        params["system"] = system_blocks
+    return params
+
+
+def _anthropic_messages_with_cache(
+    *, model: str, system_static: str, user_static: str, user_dynamic: str,
+    temperature: float = 0.0, max_tokens: int = 8192,
+    retries: int = 3, backoff: float = 2.0,
+) -> str:
+    client = _get_anthropic_client()
+    params = _build_anthropic_request_params(
+        model=model, system_static=system_static, user_static=user_static,
+        user_dynamic=user_dynamic, temperature=temperature, max_tokens=max_tokens,
+    )
+    for attempt in range(retries):
+        try:
+            resp = client.messages.create(**params)
+            text = "".join(b.text for b in resp.content if hasattr(b, "text"))
+            _accumulate_usage({
+                "cache_creation_input_tokens": getattr(resp.usage, "cache_creation_input_tokens", 0) or 0,
+                "cache_read_input_tokens": getattr(resp.usage, "cache_read_input_tokens", 0) or 0,
+                "input_tokens": resp.usage.input_tokens,
+                "output_tokens": resp.usage.output_tokens,
+            })
+            return text
+        except Exception as e:
+            if attempt == retries - 1:
+                raise
+            wait = backoff * (2 ** attempt)
+            print(f"[RETRY {attempt + 1}/{retries}] {type(e).__name__}: {e} — {wait:.1f}s")
+            time.sleep(wait)
+    return ""
+
+
+def _anthropic_messages_batch(
+    *, model: str,
+    items: List[Tuple[str, str, str, str]],
+    temperature: float = 0.0, max_tokens: int = 8192,
+    poll_interval: float = 15.0,
+) -> Dict[str, str]:
+    """Submete batch e bloqueia até concluir. items=[(custom_id, system_static, user_static, user_dynamic)]."""
+    client = _get_anthropic_client()
+    requests = []
+    for custom_id, sys_s, user_s, user_d in items:
+        params = _build_anthropic_request_params(
+            model=model, system_static=sys_s, user_static=user_s, user_dynamic=user_d,
+            temperature=temperature, max_tokens=max_tokens,
         )
-        return "".join(b.text for b in resp.content if hasattr(b, "text"))
+        requests.append({"custom_id": custom_id, "params": params})
+
+    print(f"[Batch] Submetendo {len(requests)} requests para {model}...")
+    batch = client.messages.batches.create(requests=requests)
+    print(f"[Batch] ID: {batch.id} | aguardando (poll a cada {poll_interval:.0f}s)...")
+
+    while batch.processing_status != "ended":
+        time.sleep(poll_interval)
+        batch = client.messages.batches.retrieve(batch.id)
+        rc = batch.request_counts
+        print(f"[Batch {batch.id[:16]}] proc={rc.processing} ok={rc.succeeded} err={rc.errored} cancel={rc.canceled} exp={rc.expired}")
+
+    print("[Batch] Concluído. Lendo resultados...")
+    results: Dict[str, str] = {}
+    falhos: List[str] = []
+    for entry in client.messages.batches.results(batch.id):
+        custom_id = entry.custom_id
+        if entry.result.type == "succeeded":
+            msg = entry.result.message
+            text = "".join(b.text for b in msg.content if hasattr(b, "text"))
+            _accumulate_usage({
+                "cache_creation_input_tokens": getattr(msg.usage, "cache_creation_input_tokens", 0) or 0,
+                "cache_read_input_tokens": getattr(msg.usage, "cache_read_input_tokens", 0) or 0,
+                "input_tokens": msg.usage.input_tokens,
+                "output_tokens": msg.usage.output_tokens,
+            })
+            results[custom_id] = text
+        else:
+            falhos.append(custom_id)
+
+    if falhos:
+        print(f"[Batch] {len(falhos)} requests falharam. Retry síncrono...")
+        item_by_id = {it[0]: it for it in items}
+        for cid in falhos:
+            try:
+                _, sys_s, user_s, user_d = item_by_id[cid]
+                results[cid] = _anthropic_messages_with_cache(
+                    model=model, system_static=sys_s, user_static=user_s, user_dynamic=user_d,
+                    temperature=temperature, max_tokens=max_tokens,
+                )
+            except Exception as e:
+                print(f"[Batch] retry de {cid} falhou: {e}")
+                results[cid] = ""
+
+    return results
+
+
+def _chat(client: Any, model: str, system: str, user_static: str, user_dynamic: str = "",
+          temperature: float = 0.0) -> str:
+    """Sync. Para Anthropic separa user_static (cacheable) de user_dynamic (não cache)."""
+    if _provider_for(model) == "anthropic":
+        return _anthropic_messages_with_cache(
+            model=model, system_static=system,
+            user_static=user_static, user_dynamic=user_dynamic,
+            temperature=temperature, max_tokens=8192,
+        )
+    # OpenAI: concatena user_static + user_dynamic (cache automático na maior parte dos modelos)
+    user = (user_static + ("\n\n" + user_dynamic if user_dynamic else "")).strip()
     kwargs: Dict[str, Any] = {
         "model": model,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
+        "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
     }
     if _model_supports_temperature(model):
         kwargs["temperature"] = temperature
     resp = _get_openai_client().chat.completions.create(**kwargs)
     return resp.choices[0].message.content or ""
+
+
+def _print_usage_summary() -> None:
+    if not any(USAGE_TOTALS.values()):
+        return
+    cache_read = USAGE_TOTALS["cache_read_input_tokens"]
+    cache_create = USAGE_TOTALS["cache_creation_input_tokens"]
+    inp = USAGE_TOTALS["input_tokens"]
+    out = USAGE_TOTALS["output_tokens"]
+    print()
+    print("=" * 60)
+    print("[Uso Anthropic — totais]")
+    print(f"  Input (não cacheado):       {inp:>10,} tokens")
+    print(f"  Cache create (escrita):     {cache_create:>10,} tokens (custa 1.25x input)")
+    print(f"  Cache read (hit):           {cache_read:>10,} tokens (custa 0.10x input — economia ~90%)")
+    print(f"  Output:                     {out:>10,} tokens")
+    print("=" * 60)
 
 def _slugify(s: str) -> str:
     s = (s or "").strip().lower()
@@ -375,27 +522,27 @@ def _slugify(s: str) -> str:
 # Conversão de RESUMO -> "transcrição" sintética
 # =========================
 
-def _render_resumo_item(it: Any) -> Optional[str]:
-    """Renderiza um item de resumo como linha legível.
-    Aceita string (campos simples) ou objeto {titulo, profundidade, trecho_evidencia}.
-    """
-    if isinstance(it, str):
-        s = it.strip()
-        return s or None
-    if isinstance(it, dict):
-        titulo = str(it.get("titulo", "") or "").strip()
-        if not titulo:
-            return None
-        prof = str(it.get("profundidade", "") or "").strip()
-        trecho = str(it.get("trecho_evidencia", "") or "").strip()
-        partes = [titulo]
-        if prof:
-            partes.append(f"[{prof}]")
-        s = " ".join(partes)
-        if trecho:
-            s += f": {trecho}"
-        return s
-    return None
+def _render_conteudo_testavel(c: Dict[str, Any]) -> List[str]:
+    """Renderiza 1 conteudo_testavel como bloco de linhas para o prompt."""
+    topico = str(c.get("topico", "") or "").strip()
+    if not topico:
+        return []
+    nivel = str(c.get("nivel", "") or "").strip()
+    tipo = str(c.get("tipo", "") or "").strip()
+    hab = str(c.get("habilidade", "") or "").strip()
+    ev = str(c.get("evidencia_de_ensino", "") or "").strip()
+    armadilhas = c.get("armadilhas_comuns", []) or []
+
+    cabecalho_tags = "/".join(t for t in (nivel, tipo) if t)
+    head = f"- {topico}" + (f" [{cabecalho_tags}]" if cabecalho_tags else "")
+    out = [head]
+    if hab:
+        out.append(f"  Habilidade: {hab}")
+    if ev:
+        out.append(f"  Como foi ensinado: {ev}")
+    if armadilhas:
+        out.append("  Armadilhas comuns: " + " | ".join(str(a) for a in armadilhas))
+    return out
 
 
 def resumo_to_transcription_text(course: Dict[str, Any]) -> str:
@@ -405,15 +552,28 @@ def resumo_to_transcription_text(course: Dict[str, Any]) -> str:
     lines: List[str] = [f"Curso: {nome}"]
     if link:
         lines[0] += f" | Fonte: {link}"
-    for k in SCHEMA_KEYS:
-        items = resumo.get(k, []) or []
-        if items:
-            label = k.replace('_', ' ').capitalize()
-            lines.append(f"{label}:")
-            for it in items:
-                rendered = _render_resumo_item(it)
-                if rendered:
-                    lines.append(f"- {rendered}")
+
+    tema = str(resumo.get("tema_central", "") or "").strip()
+    if tema:
+        lines.append(f"Tema central: {tema}")
+
+    conteudos = resumo.get("conteudos_testaveis", []) or []
+    centrais = [c for c in conteudos if c.get("nivel") == "central"]
+    complementares = [c for c in conteudos if c.get("nivel") != "central"]
+
+    if centrais:
+        lines.append("Conteúdos centrais (prioridade na prova):")
+        for c in centrais:
+            lines.extend(_render_conteudo_testavel(c))
+    if complementares:
+        lines.append("Conteúdos complementares:")
+        for c in complementares:
+            lines.extend(_render_conteudo_testavel(c))
+
+    ferramentas = resumo.get("ferramentas_usadas", []) or []
+    if ferramentas:
+        lines.append(f"Ferramentas usadas no curso: {', '.join(ferramentas)}")
+
     text = "\n".join(lines)
     if len(text) > SINGLE_PASS_CHAR_LIMIT:
         text = text[:SINGLE_PASS_CHAR_LIMIT]
@@ -541,30 +701,26 @@ def _load_resumos_via_cli(path: str) -> List[Dict[str, Any]]:
     return json.loads(p.read_text(encoding="utf-8"))
 
 def _compact_for_ranking(courses: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Para o ranqueamento de dificuldade só interessam os títulos dos itens —
-    profundidade/evidência seriam ruído."""
-    keep_keys = ["conceitos_chave", "topicos", "habilidades"]
+    """Para o ranqueamento de dificuldade só interessa o tema + tópicos centrais."""
     compact = []
     for c in courses:
         resumo = c.get("resumo", {}) or {}
-        bloco: Dict[str, List[str]] = {}
-        for k in keep_keys:
-            items = resumo.get(k, []) or []
-            titulos: List[str] = []
-            for it in items:
-                if isinstance(it, str):
-                    s = it.strip()
-                    if s:
-                        titulos.append(s)
-                elif isinstance(it, dict):
-                    t = str(it.get("titulo", "") or "").strip()
-                    if t:
-                        titulos.append(t)
-            bloco[k] = titulos
+        topicos_centrais: List[str] = []
+        topicos_complementares: List[str] = []
+        for ct in resumo.get("conteudos_testaveis", []) or []:
+            t = str(ct.get("topico", "") or "").strip()
+            if not t:
+                continue
+            if ct.get("nivel") == "central":
+                topicos_centrais.append(t)
+            else:
+                topicos_complementares.append(t)
         compact.append({
             "id": c.get("id"),
             "nome": c.get("nome"),
-            "resumo": bloco,
+            "tema_central": resumo.get("tema_central", ""),
+            "topicos_centrais": topicos_centrais,
+            "topicos_complementares": topicos_complementares,
         })
     return compact
 
@@ -647,17 +803,18 @@ def _progress_done():
 # Núcleo: geração de questões — TXT + ranking por dificuldade (mini)
 # =========================
 
-def _ask_exercise_ideas(client: OpenAI, transcription_text: str, domains_csv: str) -> str:
+def _ask_exercise_ideas(client: Any, transcription_text: str, domains_csv: str) -> str:
     return _chat(
         client,
         MODEL_IDEAS,
         system_prompt_to_ask_for_exercise_ideas(),
-        user_prompt_to_ask_for_exercise_ideas(domains_csv, transcription_text),
+        user_prompt_to_ask_for_exercise_ideas_static(),
+        user_prompt_to_ask_for_exercise_ideas_dynamic(domains_csv, transcription_text),
         temperature=TEMPERATURE_IDEAS,
     )
 
-def _to_multiple_choice(client: OpenAI, ex: ExerciseItem, domains_csv: str) -> str:
-    user = user_prompt_to_transform_into_multiple_choice({
+def _to_multiple_choice(client: Any, ex: "ExerciseItem", domains_csv: str) -> str:
+    user_dynamic = user_prompt_to_transform_into_multiple_choice_dynamic({
         "titulo": ex.titulo,
         "pergunta": ex.pergunta,
         "resposta": ex.resposta,
@@ -666,19 +823,22 @@ def _to_multiple_choice(client: OpenAI, ex: ExerciseItem, domains_csv: str) -> s
         client,
         MODEL_FORMAT,
         system_prompt_to_transform_into_multiple_choice(),
-        user,
+        user_prompt_to_transform_into_multiple_choice_static(),
+        user_dynamic,
         temperature=0.0,
     )
 
-def _maybe_adjust_alternative_sizes(client: OpenAI, mc_text: str, ajustar: bool) -> str:
+def _maybe_adjust_alternative_sizes(client: Any, mc_text: str, ajustar: bool) -> str:
     if not ajustar:
         return mc_text
     if not is_any_alternative_longer_than_20_percent_of_the_correct_alternative(mc_text):
         return mc_text
+    # mc_text é totalmente dinâmico (não cacheia)
     return _chat(
         client,
         MODEL_IDEAS,
         system_prompt_to_adjust_alternative_sizes(),
+        "",  # user_static vazio (esta etapa não tem parte estática significativa)
         user_prompt_to_adjust_alternative_sizes(mc_text),
         temperature=0.0,
     )
@@ -694,6 +854,7 @@ def gerar_prova_teorica(
     permitir_exceder_max: bool = False,
     domains_window: int = 3,
     ajustar_alternativas: bool = False,
+    batch_mode: bool = True,
 ) -> str:
     load_dotenv()
     # Clients OpenAI/Anthropic são lazy — instanciados em _chat() conforme o MODEL.
@@ -715,6 +876,9 @@ def gerar_prova_teorica(
     # ---- Fase 1: Gera ideias por curso (1 chamada por curso) ----
     print("Fase 1/4: Gerando ideias por curso...")
     n_courses = len(courses)
+
+    # Prepara lista de (nome, transcription, domains_csv) para cada curso
+    cursos_prep: List[Tuple[str, str, str]] = []
     for idx, course in enumerate(courses, start=1):
         nome = course.get("nome") or f"Curso {course.get('id')}"
         transcription = resumo_to_transcription_text(course)
@@ -722,35 +886,99 @@ def gerar_prova_teorica(
         if not doms:
             doms = domains
         domains_csv = ", ".join(doms)
-        raw_ideas = _ask_exercise_ideas(client, transcription, domains_csv)
-        exercises = _parse_exercise_ideas_verbatim(raw_ideas)  # parser local (sem IA extra)
-        ideias_por_curso.append((str(nome), exercises, domains_csv))
-        _progress("  → Ideias geradas", idx, n_courses)
-    _progress_done()
+        cursos_prep.append((str(nome), transcription, domains_csv))
+
+    use_batch_f1 = batch_mode and _provider_for(MODEL_IDEAS) == "anthropic" and n_courses >= 2
+    if use_batch_f1:
+        print(f"  → Fase 1 via Anthropic Batch ({n_courses} requests)")
+        items: List[Tuple[str, str, str, str]] = []
+        for i, (nome, transcription, domains_csv) in enumerate(cursos_prep):
+            items.append((
+                f"f1_{i}",
+                system_prompt_to_ask_for_exercise_ideas(),
+                user_prompt_to_ask_for_exercise_ideas_static(),
+                user_prompt_to_ask_for_exercise_ideas_dynamic(domains_csv, transcription),
+            ))
+        try:
+            responses = _anthropic_messages_batch(model=MODEL_IDEAS, items=items, temperature=TEMPERATURE_IDEAS)
+            for i, (nome, _, domains_csv) in enumerate(cursos_prep):
+                raw_ideas = responses.get(f"f1_{i}", "")
+                exercises = _parse_exercise_ideas_verbatim(raw_ideas)
+                ideias_por_curso.append((nome, exercises, domains_csv))
+        except Exception as e:
+            print(f"[Fase 1] Batch falhou ({type(e).__name__}: {e}). Fallback sync.")
+            use_batch_f1 = False
+
+    if not use_batch_f1:
+        # Sync: 1 chamada por curso
+        for idx, (nome, transcription, domains_csv) in enumerate(cursos_prep, start=1):
+            raw_ideas = _ask_exercise_ideas(client, transcription, domains_csv)
+            exercises = _parse_exercise_ideas_verbatim(raw_ideas)
+            ideias_por_curso.append((nome, exercises, domains_csv))
+            _progress("  → Ideias geradas", idx, n_courses)
+        _progress_done()
 
     todas_texto: List[str] = []
     por_curso_count: Dict[int, int] = {}
 
     # ---- Fase 2: mínimo por curso ----
     print("Fase 2/4: Montando questões (mínimo por curso)...")
+
+    # Coleta todos os pares (curso_idx, ex) que viram chamada nesta fase
+    f2_calls: List[Tuple[int, "ExerciseItem", str]] = []  # (curso_idx, exercicio, domains_csv)
+    for c_idx, (_, exercises, domains_csv) in enumerate(ideias_por_curso):
+        for j, ex in enumerate(exercises[:min_por_curso]):
+            f2_calls.append((c_idx, ex, domains_csv))
+
+    use_batch_f2 = batch_mode and _provider_for(MODEL_FORMAT) == "anthropic" and len(f2_calls) >= 2
+    f2_results: Dict[int, str] = {}  # call_idx -> mc_text
+    if use_batch_f2:
+        print(f"  → Fase 2 via Anthropic Batch ({len(f2_calls)} requests)")
+        items_f2: List[Tuple[str, str, str, str]] = []
+        for k, (_c_idx, ex, domains_csv) in enumerate(f2_calls):
+            items_f2.append((
+                f"f2_{k}",
+                system_prompt_to_transform_into_multiple_choice(),
+                user_prompt_to_transform_into_multiple_choice_static(),
+                user_prompt_to_transform_into_multiple_choice_dynamic(
+                    {"titulo": ex.titulo, "pergunta": ex.pergunta, "resposta": ex.resposta},
+                    domains_csv,
+                ),
+            ))
+        try:
+            resp = _anthropic_messages_batch(model=MODEL_FORMAT, items=items_f2, temperature=TEMPERATURE_FORMAT)
+            for k in range(len(f2_calls)):
+                f2_results[k] = resp.get(f"f2_{k}", "")
+        except Exception as e:
+            print(f"[Fase 2] Batch falhou ({type(e).__name__}: {e}). Fallback sync.")
+            use_batch_f2 = False
+
+    # Aplica resultados (batch ou sync) e maybe_adjust (sync sempre — depende de avaliação local)
     total_phase2 = len(courses) * max(0, min_por_curso)
     done_phase2 = 0
+    call_k = 0
     for idx, (nome, exercises, domains_csv) in enumerate(ideias_por_curso):
         want = min_por_curso
         got = 0
         for ex in exercises:
             if got >= want:
                 break
-            mc = _to_multiple_choice(client, ex, domains_csv)
+            if use_batch_f2:
+                mc = f2_results.get(call_k, "")
+                call_k += 1
+            else:
+                mc = _to_multiple_choice(client, ex, domains_csv)
             mc = _maybe_adjust_alternative_sizes(client, mc, ajustar_alternativas)
             mc = add_line_break_before_question(mc)
             header = f"EXERCÍCIO {len(todas_texto)+1} (curso: {nome})\n"
             todas_texto.append(header + mc)
             got += 1
             done_phase2 += 1
-            _progress("  → Questões mínimas", done_phase2, total_phase2 if total_phase2 else 1)
+            if not use_batch_f2:
+                _progress("  → Questões mínimas", done_phase2, total_phase2 if total_phase2 else 1)
         por_curso_count[idx] = got
-    _progress_done()
+    if not use_batch_f2:
+        _progress_done()
 
     # ---- Fase 3: completar até o alvo ----
     print("Fase 3/4: Completando até atingir o alvo total...")
@@ -806,6 +1034,7 @@ def gerar_prova_teorica(
             client,
             MODEL_RANK,
             system_prompt_rank_difficulty_plain(),
+            "",  # rank é 1 chamada com input dinâmico — sem parte estática separada
             user_prompt_rank_difficulty_plain(
                 questions_text_block=block,
                 resumos_compactos_json=resumos_compact_json,
@@ -867,6 +1096,7 @@ def main():
     parser.add_argument("--domains_window", type=int, default=3)
     parser.add_argument("--domains_arquivo", type=str, default="", help="JSON com lista de domínios (opcional)")
     parser.add_argument("--ajustar_alternativas", action="store_true", help="(Opcional) Tenta igualar o tamanho das alternativas — aumenta custo.")
+    parser.add_argument("--no-batch", action="store_true", help="Desativa modo batch (Anthropic). Usa execução síncrona — apenas para debug.")
     args = parser.parse_args()
 
     # Domínios
@@ -894,6 +1124,7 @@ def main():
         permitir_exceder_max=args.permitir_exceder_max,
         domains_window=args.domains_window,
         ajustar_alternativas=args.ajustar_alternativas,
+        batch_mode=not args.no_batch,
     )
     elapsed = time.perf_counter() - t0
 
@@ -906,6 +1137,7 @@ def main():
     mins = int(elapsed // 60)
     secs = int(elapsed % 60)
     print(f"[Tempo total] {mins} min {secs} s")
+    _print_usage_summary()
 
 if __name__ == "__main__":
     main()

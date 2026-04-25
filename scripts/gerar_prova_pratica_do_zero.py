@@ -59,27 +59,18 @@ if sys.platform == "win32":
 # Config de modelos
 # =========================
 # Geração da prova prática: top de linha (segue restrições rigorosas de escopo)
-MODEL_GEN = "gpt-5"
+MODEL_GEN = "claude-opus-4-7"
 TEMP = 0.0
+
+# Alternativas:
+# MODEL_GEN = "claude-sonnet-4-6"  # ~30% do custo
+# MODEL_GEN = "gpt-5" / "gpt-4o-2024-08-06"
 SINGLE_PASS_CHAR_LIMIT = 300_000
 
 INPUT_DIR = Path(__file__).resolve().parent.parent / "output" / "checkpoints"
 OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output" / "cursos_checkpoint"
 
-STRING_KEYS = [
-    "objetivos",
-    "topicos",
-    "erros_ou_armadilhas_comuns",
-]
-OBJECT_KEYS = [
-    "habilidades",
-    "ferramentas_ou_bibliotecas",
-    "conceitos_chave",
-    "exemplos_relevantes",
-]
-SCHEMA_KEYS = STRING_KEYS + OBJECT_KEYS
-
-PROFUNDIDADE_RANK = {"demonstrado": 3, "praticado": 2, "apenas_mencionado": 1}
+# Schema novo (etapa 2): resumo por curso é {tema_central, conteudos_testaveis[], ferramentas_usadas[]}.
 
 # Regras de datasets (para carreiras de dados)
 MIN_ROWS = 30
@@ -155,92 +146,51 @@ def _load_resumos_via_cli(path: str, nivel: int, carreira: str) -> List[Dict[str
         raise FileNotFoundError(f"Arquivo de resumos não encontrado: {p}")
     return json.loads(p.read_text(encoding="utf-8"))
 
-def _filtrar_objetos_por_profundidade(items: List[Any], min_rank: int) -> List[Dict[str, Any]]:
-    """Mantém só itens com profundidade >= min_rank. Strings sem objeto entram com rank 1."""
-    out: List[Dict[str, Any]] = []
-    for x in items or []:
-        if isinstance(x, dict):
-            rank = PROFUNDIDADE_RANK.get(str(x.get("profundidade", "")).strip(), 1)
-            if rank >= min_rank:
-                out.append(x)
-        elif isinstance(x, str) and x.strip() and min_rank <= 1:
-            out.append({"titulo": x.strip(), "profundidade": "apenas_mencionado", "trecho_evidencia": ""})
-    return out
-
-
-def _titulos(items: List[Any]) -> List[str]:
-    titulos: List[str] = []
-    for x in items or []:
-        if isinstance(x, dict):
-            t = str(x.get("titulo", "") or "").strip()
-            if t:
-                titulos.append(t)
-        elif isinstance(x, str):
-            s = x.strip()
-            if s:
-                titulos.append(s)
-    return titulos
-
-
 def _resumos_compactos(resumos: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Compacta resumos para o prompt, filtrando 'apenas_mencionado' dos campos enriquecidos
-    (reduz ruído visto pelo modelo)."""
-    compactos = []
-    for c in resumos:
-        r = c.get("resumo", {}) or {}
-        bloco: Dict[str, Any] = {k: r.get(k, []) for k in STRING_KEYS}
-        for k in OBJECT_KEYS:
-            bloco[k] = _filtrar_objetos_por_profundidade(r.get(k, []), min_rank=2)
-        compactos.append({
+    """Passa o resumo direto — etapa 2 já filtrou (só conteudos_testaveis)."""
+    return [
+        {
             "id": c.get("id"),
             "nome": c.get("nome"),
             "link": c.get("link"),
-            "resumo": bloco,
-        })
-    return compactos
+            "resumo": c.get("resumo", {}) or {},
+        }
+        for c in resumos
+    ]
 
 
 def _derivar_ferramentas_permitidas(resumos: List[Dict[str, Any]], ferramentas_cli: Optional[List[str]]) -> List[str]:
-    """Deriva ferramentas permitidas exigindo evidência de uso ensinado.
-    Regra: ferramenta entra se aparece como 'demonstrado' em pelo menos 1 curso,
-    OU como 'praticado' em pelo menos 2 cursos. 'apenas_mencionado' é descartado.
-    """
+    """Consolida `ferramentas_usadas` de todos os cursos. A etapa 2 já filtrou para incluir
+    APENAS ferramentas com uso real, então não há threshold/contagem aqui."""
     if isinstance(ferramentas_cli, list) and ferramentas_cli:
         return ferramentas_cli
 
-    contagem: Dict[str, Dict[str, int]] = {}  # titulo_lower -> {titulo, demonstrado, praticado}
+    seen: Dict[str, str] = {}
     for c in resumos:
-        arr = (c.get("resumo", {}) or {}).get("ferramentas_ou_bibliotecas", []) or []
-        for item in arr:
-            if isinstance(item, dict):
-                titulo = str(item.get("titulo", "") or "").strip()
-                prof = str(item.get("profundidade", "") or "").strip()
-            elif isinstance(item, str):
-                titulo = item.strip()
-                prof = "apenas_mencionado"
-            else:
-                continue
-            if not titulo or prof not in PROFUNDIDADE_RANK:
-                continue
-            key = titulo.lower()
-            entry = contagem.setdefault(key, {"titulo": titulo, "demonstrado": 0, "praticado": 0})
-            if prof == "demonstrado":
-                entry["demonstrado"] += 1
-            elif prof == "praticado":
-                entry["praticado"] += 1
+        for f in (c.get("resumo", {}) or {}).get("ferramentas_usadas", []) or []:
+            s = str(f).strip()
+            if s and s.lower() not in seen:
+                seen[s.lower()] = s
 
-    # Threshold: precisa de evidência em pelo menos 2 cursos (uso ensinado em mais de uma aula).
-    # Isso elimina ferramentas que apareceram demonstradas só uma vez (provavelmente passagem rápida).
-    aprovadas = [
-        e["titulo"]
-        for e in contagem.values()
-        if e["demonstrado"] >= 2 or (e["demonstrado"] + e["praticado"]) >= 3
-    ]
-
-    if not aprovadas:
-        # Fallback conservador: carreira é conceitual, sem programação
+    if not seen:
+        # Fallback conservador: carreira sem ferramentas demonstradas
         return ["Planilhas (Excel/Google Sheets)", "Editor de texto (Word/Google Docs)", "Draw.io"]
-    return sorted(aprovadas)
+    return sorted(seen.values())
+
+
+def _perfil_carreira(resumos: List[Dict[str, Any]]) -> str:
+    """Classifica a carreira por proporção de conteúdos procedimentais.
+    >50% dos conteudos_testaveis com tipo 'procedimental' → programatica; senão → conceitual."""
+    total = 0
+    procedimentais = 0
+    for c in resumos:
+        for ct in (c.get("resumo", {}) or {}).get("conteudos_testaveis", []) or []:
+            total += 1
+            if str(ct.get("tipo", "")).strip().lower() == "procedimental":
+                procedimentais += 1
+    if total == 0:
+        return "conceitual"
+    return "programatica" if (procedimentais / total) > 0.5 else "conceitual"
 
 
 def _carreira_envolve_dados(carreira: str, ferramentas: List[str], resumos: List[Dict[str, Any]]) -> bool:
@@ -252,18 +202,12 @@ def _carreira_envolve_dados(carreira: str, ferramentas: List[str], resumos: List
     gatilhos_ferr = ["sql", "pandas", "spark", "hive", "power bi", "tableau", "dbt", "airflow"]
     if any(any(g in f for g in gatilhos_ferr) for f in ferr_l):
         return True
-    # Olha tópicos/conceitos/habilidades dos resumos. Para campos enriquecidos, considera só
-    # itens com profundidade >= praticado (apenas_mencionado é poluição).
+    # Inspeciona tópicos e habilidades dos conteudos_testaveis
     for c in resumos:
-        r = c.get("resumo") or {}
-        # topicos é string-list
-        joined = " ".join(str(x).lower() for x in r.get("topicos", []) or [])
-        # conceitos_chave e habilidades são objeto-list — pega só títulos com prof >= praticado
-        for k in ("conceitos_chave", "habilidades"):
-            objs = _filtrar_objetos_por_profundidade(r.get(k, []), min_rank=2)
-            joined += " " + " ".join(str(o.get("titulo", "")).lower() for o in objs)
-        if any(g in joined for g in ["sql", "dataset", "pandas", "etl", "pipeline", "visualização", "visualizacao", "bi"]):
-            return True
+        for ct in (c.get("resumo") or {}).get("conteudos_testaveis", []) or []:
+            joined = (str(ct.get("topico", "")) + " " + str(ct.get("habilidade", ""))).lower()
+            if any(g in joined for g in ["sql", "dataset", "pandas", "etl", "pipeline", "visualização", "visualizacao", "bi"]):
+                return True
     return False
 
 # =========================
@@ -275,6 +219,9 @@ Sua tarefa é gerar a **Aula 3 – “03.Prova prática”** de um curso de Chec
 
 Regras gerais (mantenha TODAS):
 - **Autoridade da lista de ferramentas (REGRA DURA)**: a lista "Ferramentas permitidas" recebida no user prompt é DEFINITIVA. Use APENAS ferramentas dessa lista. **NÃO extraia** ferramentas adicionais dos resumos. Os resumos foram pré-filtrados para você por profundidade pedagógica, mas mesmo assim podem conter itens classificados como "apenas_mencionado" — esses NÃO foram ensinados de verdade no curso e estão PROIBIDOS na prova. Se uma ferramenta não está na lista "Ferramentas permitidas", ela não foi ensinada e não pode aparecer.
+- **Perfil da carreira (REGRA DURA)**: o user prompt informa o `perfil` da carreira como `programatica` ou `conceitual`.
+  - Se **conceitual** (governança, papéis, processos, políticas): prefira **entregáveis documentais e diagramáticos** — planilhas, documentos, fluxogramas, organogramas, políticas escritas, glossários em planilha. Use linguagens de programação ou bibliotecas (Python, Pandas, etc.) APENAS quando a tarefa não puder ser representada de outra forma — e mesmo aí, mantenha o uso minimalista (1 etapa no máximo, com script curto).
+  - Se **programática** (back-end, ciência de dados, ML): priorize código, scripts, configurações e datasets, com etapas técnicas mais densas.
 - **Profundidade dos itens**: nos resumos, cada habilidade/conceito/exemplo vem com `profundidade` ∈ {`demonstrado`, `praticado`, `apenas_mencionado`}. Construa entregáveis APENAS sobre o que está como `demonstrado` ou `praticado`. Itens `apenas_mencionado` podem ser referenciados em texto, mas nunca pedidos como tarefa.
 - **Cobertura do nível**: inclua ao longo das etapas ao menos **um item** que mobilize **cada curso** do nível (faça mapeamento ao final). NÃO UTILIZE FERRAMENTAS DE NUVEM (AWS, Amazon, Azure, GCP, Google Cloud Platform e qualquer serviço derivado destes grandes serviços) que geram custos para os alunos.
 - **Não invente conteúdo**: não introduza ferramentas, conceitos ou técnicas que **não apareçam** nos resumos; apenas adapte e combine o que já foi visto.
@@ -351,11 +298,12 @@ def user_prompt_aula3_txt(
     ferramentas_permitidas: List[str],
     resumos_json_do_nivel: str,
     carreira_env_dados: bool,
+    perfil_carreira: str = "conceitual",
 ) -> str:
     ferr = json.dumps(ferramentas_permitidas, ensure_ascii=False)
     return (
         f"Gere a **Aula 3 – Prova prática** seguindo integralmente as regras do sistema e retornando **apenas TEXTO** no formato exigido.\n\n"
-        f"Contexto do nível:\n- Nível: {nivel_str}\n- Carreira: {carreira_str}\n- Carreira envolve dados? {'SIM' if carreira_env_dados else 'NÃO'}\n\n"
+        f"Contexto do nível:\n- Nível: {nivel_str}\n- Carreira: {carreira_str}\n- Perfil da carreira: {perfil_carreira.upper()}\n- Carreira envolve dados? {'SIM' if carreira_env_dados else 'NÃO'}\n\n"
         "Domínios disponíveis (escolha **um** e mantenha-o em todas as etapas):\n"
         + domains_list_formatada
         + "\n\nFerramentas permitidas (use apenas dentre estas):\n"
@@ -367,6 +315,7 @@ def user_prompt_aula3_txt(
         "IMPORTANTE: A carreira segue uma evolução em níveis (1, 2 e 3), onde o nível 1 é o mais básico, o 2 o intermediário e o 3 o nível mais avançado. Considere isso no momente de elaborar o projeto, trazendo um nível de complexidade condizente com o nível do aluno. Ou seja, o nível 3 precisa de projetos maiores e mais elaborados.\n"
         "- Se **envolver dados**, gere um ou mais datasets **in-line** (CSV/JSON) com 30–120 linhas (não sensível) em blocos ```csv/```json.\n"
         "- Se **NÃO envolver dados**, **não** gere datasets; foque em tarefas coerentes (APIs, scripts, configs, automações, testes, etc.).\n"
+        "- Se o **perfil é CONCEITUAL**, prefira entregáveis documentais/diagramáticos (planilhas, organogramas, fluxogramas, glossários, políticas escritas). Use programação só se indispensável e em uma única etapa.\n"
         "- Escalone a dificuldade (1ª→4ª etapa) e inclua a Matriz de cobertura no final."
     )
 
@@ -410,19 +359,38 @@ def _get_anthropic_client() -> Anthropic:
     return _anthropic_client
 
 
+USAGE_TOTALS: Dict[str, int] = {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+}
+
+
+def _accumulate_usage(usage: Dict[str, int]) -> None:
+    for k in USAGE_TOTALS:
+        USAGE_TOTALS[k] += int(usage.get(k, 0) or 0)
+
+
 def _chat(client: Any, model: str, system: str, user: str) -> str:
-    """Roteia para OpenAI ou Anthropic com base no prefixo do `model`.
-    O parâmetro `client` é mantido por compatibilidade com chamadas existentes,
-    mas é ignorado — os clients são lazy/cacheados internamente."""
+    """Roteia OpenAI vs Anthropic. Para Anthropic usa prompt caching no system prompt
+    (que é grande e não muda entre runs)."""
     if _provider_for(model) == "anthropic":
         resp = _get_anthropic_client().messages.create(
             model=model,
             max_tokens=8192,
-            system=system,
+            system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
             messages=[{"role": "user", "content": user}],
             temperature=TEMP,
         )
-        return "".join(b.text for b in resp.content if hasattr(b, "text"))
+        text = "".join(b.text for b in resp.content if hasattr(b, "text"))
+        _accumulate_usage({
+            "cache_creation_input_tokens": getattr(resp.usage, "cache_creation_input_tokens", 0) or 0,
+            "cache_read_input_tokens": getattr(resp.usage, "cache_read_input_tokens", 0) or 0,
+            "input_tokens": resp.usage.input_tokens,
+            "output_tokens": resp.usage.output_tokens,
+        })
+        return text
     kwargs: Dict[str, Any] = {
         "model": model,
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
@@ -431,6 +399,23 @@ def _chat(client: Any, model: str, system: str, user: str) -> str:
         kwargs["temperature"] = TEMP
     resp = _get_openai_client().chat.completions.create(**kwargs)
     return resp.choices[0].message.content or ""
+
+
+def _print_usage_summary() -> None:
+    if not any(USAGE_TOTALS.values()):
+        return
+    cache_read = USAGE_TOTALS["cache_read_input_tokens"]
+    cache_create = USAGE_TOTALS["cache_creation_input_tokens"]
+    inp = USAGE_TOTALS["input_tokens"]
+    out = USAGE_TOTALS["output_tokens"]
+    print()
+    print("=" * 60)
+    print("[Uso Anthropic — totais]")
+    print(f"  Input (não cacheado):       {inp:>10,} tokens")
+    print(f"  Cache create (escrita):     {cache_create:>10,} tokens")
+    print(f"  Cache read (hit):           {cache_read:>10,} tokens (~90% off)")
+    print(f"  Output:                     {out:>10,} tokens")
+    print("=" * 60)
 
 # =========================
 # Ajuste LOCAL de datasets (CSV/JSON) no TXT
@@ -687,12 +672,16 @@ def gerar_aula3_txt(
     else:
         envolve_dados = envolve_dados_auto
 
+    # Classifica perfil da carreira (programatica vs conceitual)
+    perfil = _perfil_carreira(resumos)
+    print(f"  → Perfil da carreira: {perfil} | envolve dados: {envolve_dados}")
+
     _progress("  → Insumos prontos", 1, 1)
     _progress_done()
     t_phase["prep"] = time.perf_counter() - t1
 
     # Fase 2 — Geração (1 chamada)
-    print("Fase 2/4: Gerando texto da prova (gpt-4o)...")
+    print(f"Fase 2/4: Gerando texto da prova ({MODEL_GEN})...")
     t2 = time.perf_counter()
     _progress("  → Solicitando ao modelo", 0, 1)
     txt = _chat(
@@ -706,6 +695,7 @@ def gerar_aula3_txt(
             ferramentas_permitidas=ferramentas,
             resumos_json_do_nivel=resumos_json,
             carreira_env_dados=envolve_dados,
+            perfil_carreira=perfil,
         ),
     )
     _progress("  → Solicitando ao modelo", 1, 1)
@@ -811,6 +801,7 @@ def main():
     mins = int(elapsed // 60)
     secs = int(elapsed % 60)
     print(f"[Tempo total] {mins} min {secs} s")
+    _print_usage_summary()
 
 if __name__ == "__main__":
     main()
