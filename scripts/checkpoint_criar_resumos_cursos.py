@@ -340,9 +340,14 @@ def _split_with_overlap(text: str, size: int, overlap: int) -> List[str]:
 # =========================
 
 def _model_supports_temperature(model: str) -> bool:
-    """gpt-5* e reasoning models (o1, o3, o4) só aceitam temperature default (1)."""
+    """Modelos que NÃO aceitam temperature customizada:
+    OpenAI: gpt-5*, reasoning (o1, o3, o4).
+    Anthropic: claude-opus-4-7+ (Sonnet 4.6 e Haiku 4.5 ainda aceitam)."""
     m = (model or "").lower()
-    return not (m.startswith("gpt-5") or m.startswith("o1") or m.startswith("o3") or m.startswith("o4"))
+    return not (
+        m.startswith("gpt-5") or m.startswith("o1") or m.startswith("o3") or m.startswith("o4")
+        or m.startswith("claude-opus-4-7") or m.startswith("claude-opus-5")
+    )
 
 
 # Acumulador global de uso para reportar economia de cache no fim do main
@@ -383,9 +388,10 @@ def _build_anthropic_request_params(
     params: Dict[str, Any] = {
         "model": model,
         "max_tokens": max_tokens,
-        "temperature": temperature,
         "messages": [{"role": "user", "content": user_content}],
     }
+    if _model_supports_temperature(model):
+        params["temperature"] = temperature
     if system_blocks:
         params["system"] = system_blocks
     return params

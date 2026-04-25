@@ -323,9 +323,14 @@ def user_prompt_aula3_txt(
 # OpenAI helper
 # =========================
 def _model_supports_temperature(model: str) -> bool:
-    """gpt-5* e reasoning models (o1, o3, o4) só aceitam temperature default (1)."""
+    """Modelos que NÃO aceitam temperature customizada:
+    OpenAI: gpt-5*, reasoning (o1, o3, o4).
+    Anthropic: claude-opus-4-7+ (Sonnet 4.6 e Haiku 4.5 ainda aceitam)."""
     m = (model or "").lower()
-    return not (m.startswith("gpt-5") or m.startswith("o1") or m.startswith("o3") or m.startswith("o4"))
+    return not (
+        m.startswith("gpt-5") or m.startswith("o1") or m.startswith("o3") or m.startswith("o4")
+        or m.startswith("claude-opus-4-7") or m.startswith("claude-opus-5")
+    )
 
 
 def _provider_for(model: str) -> str:
@@ -376,13 +381,15 @@ def _chat(client: Any, model: str, system: str, user: str) -> str:
     """Roteia OpenAI vs Anthropic. Para Anthropic usa prompt caching no system prompt
     (que é grande e não muda entre runs)."""
     if _provider_for(model) == "anthropic":
-        resp = _get_anthropic_client().messages.create(
-            model=model,
-            max_tokens=8192,
-            system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
-            messages=[{"role": "user", "content": user}],
-            temperature=TEMP,
-        )
+        kwargs_a: Dict[str, Any] = {
+            "model": model,
+            "max_tokens": 16384,
+            "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+            "messages": [{"role": "user", "content": user}],
+        }
+        if _model_supports_temperature(model):
+            kwargs_a["temperature"] = TEMP
+        resp = _get_anthropic_client().messages.create(**kwargs_a)
         text = "".join(b.text for b in resp.content if hasattr(b, "text"))
         _accumulate_usage({
             "cache_creation_input_tokens": getattr(resp.usage, "cache_creation_input_tokens", 0) or 0,

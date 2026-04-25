@@ -1,6 +1,6 @@
 # LLM (resumos + provas) — suporte a OpenAI e Anthropic via prefixo do MODEL
 openai==1.102.0
-anthropic==0.39.0
+anthropic==0.97.0
 python-dotenv==1.1.0
 
 # Scraping das transcrições (Alura)

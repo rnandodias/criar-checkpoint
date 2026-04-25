@@ -310,9 +310,14 @@ def _safe_json_loads(s: str) -> Optional[Any]:
             return None
 
 def _model_supports_temperature(model: str) -> bool:
-    """gpt-5* e reasoning models (o1, o3, o4) só aceitam temperature default (1)."""
+    """Modelos que NÃO aceitam temperature customizada:
+    OpenAI: gpt-5*, reasoning (o1, o3, o4).
+    Anthropic: claude-opus-4-7+ (Sonnet 4.6 e Haiku 4.5 ainda aceitam)."""
     m = (model or "").lower()
-    return not (m.startswith("gpt-5") or m.startswith("o1") or m.startswith("o3") or m.startswith("o4"))
+    return not (
+        m.startswith("gpt-5") or m.startswith("o1") or m.startswith("o3") or m.startswith("o4")
+        or m.startswith("claude-opus-4-7") or m.startswith("claude-opus-5")
+    )
 
 
 def _provider_for(model: str) -> str:
@@ -376,9 +381,10 @@ def _build_anthropic_request_params(
     params: Dict[str, Any] = {
         "model": model,
         "max_tokens": max_tokens,
-        "temperature": temperature,
         "messages": [{"role": "user", "content": user_content}],
     }
+    if _model_supports_temperature(model):
+        params["temperature"] = temperature
     if system_blocks:
         params["system"] = system_blocks
     return params
@@ -737,18 +743,22 @@ def _parse_exercise_ideas_verbatim(raw_text: str) -> List[ExerciseItem]:
     """
     Parser local do formato:
     Exercício N - <titulo>
-    
+
     Texto da questão:
     <pergunta...>
-    
+
     Conceito abordado:
     <...>
-    
+
     Resposta:
     <resposta...>
+
+    Tolera markdown bold (**...**) que alguns modelos (ex.: Sonnet 4.6) usam.
     """
     txt = raw_text.replace("\r\n", "\n")
-    blocks = re.split(r"\n?Exercício\s*\d+\s*-\s*", txt, flags=re.IGNORECASE)
+    # Remove markdown bold (**xxx**) e itálico (*xxx*) que cercam marcadores
+    txt = re.sub(r"\*{1,3}([^*\n]+?)\*{1,3}", r"\1", txt)
+    blocks = re.split(r"\n?Exerc[íi]cio\s*\d+\s*[-–—:]\s*", txt, flags=re.IGNORECASE)
     items: List[ExerciseItem] = []
     for blk in blocks:
         blk = blk.strip()
