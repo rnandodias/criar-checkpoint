@@ -57,23 +57,28 @@ if sys.platform == "win32":
 # =========================
 # Config de modelos
 # =========================
-# Criação (mantém 4o para qualidade de conteúdo)
-MODEL_GEN = "gpt-4o-2024-08-06"
+# Geração da prova prática: top de linha (segue restrições rigorosas de escopo)
+MODEL_GEN = "gpt-5"
 TEMP = 0.0
 SINGLE_PASS_CHAR_LIMIT = 300_000
 
 INPUT_DIR = Path(__file__).resolve().parent.parent / "output" / "checkpoints"
 OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output" / "cursos_checkpoint"
 
-SCHEMA_KEYS = [
+STRING_KEYS = [
     "objetivos",
     "topicos",
+    "erros_ou_armadilhas_comuns",
+]
+OBJECT_KEYS = [
     "habilidades",
     "ferramentas_ou_bibliotecas",
     "conceitos_chave",
     "exemplos_relevantes",
-    "erros_ou_armadilhas_comuns",
 ]
+SCHEMA_KEYS = STRING_KEYS + OBJECT_KEYS
+
+PROFUNDIDADE_RANK = {"demonstrado": 3, "praticado": 2, "apenas_mencionado": 1}
 
 # Regras de datasets (para carreiras de dados)
 MIN_ROWS = 30
@@ -149,34 +154,93 @@ def _load_resumos_via_cli(path: str, nivel: int, carreira: str) -> List[Dict[str
         raise FileNotFoundError(f"Arquivo de resumos não encontrado: {p}")
     return json.loads(p.read_text(encoding="utf-8"))
 
+def _filtrar_objetos_por_profundidade(items: List[Any], min_rank: int) -> List[Dict[str, Any]]:
+    """Mantém só itens com profundidade >= min_rank. Strings sem objeto entram com rank 1."""
+    out: List[Dict[str, Any]] = []
+    for x in items or []:
+        if isinstance(x, dict):
+            rank = PROFUNDIDADE_RANK.get(str(x.get("profundidade", "")).strip(), 1)
+            if rank >= min_rank:
+                out.append(x)
+        elif isinstance(x, str) and x.strip() and min_rank <= 1:
+            out.append({"titulo": x.strip(), "profundidade": "apenas_mencionado", "trecho_evidencia": ""})
+    return out
+
+
+def _titulos(items: List[Any]) -> List[str]:
+    titulos: List[str] = []
+    for x in items or []:
+        if isinstance(x, dict):
+            t = str(x.get("titulo", "") or "").strip()
+            if t:
+                titulos.append(t)
+        elif isinstance(x, str):
+            s = x.strip()
+            if s:
+                titulos.append(s)
+    return titulos
+
+
 def _resumos_compactos(resumos: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Compacta resumos para o prompt, filtrando 'apenas_mencionado' dos campos enriquecidos
+    (reduz ruído visto pelo modelo)."""
     compactos = []
     for c in resumos:
+        r = c.get("resumo", {}) or {}
+        bloco: Dict[str, Any] = {k: r.get(k, []) for k in STRING_KEYS}
+        for k in OBJECT_KEYS:
+            bloco[k] = _filtrar_objetos_por_profundidade(r.get(k, []), min_rank=2)
         compactos.append({
             "id": c.get("id"),
             "nome": c.get("nome"),
             "link": c.get("link"),
-            "resumo": {k: c.get("resumo", {}).get(k, []) for k in SCHEMA_KEYS}
+            "resumo": bloco,
         })
     return compactos
 
+
 def _derivar_ferramentas_permitidas(resumos: List[Dict[str, Any]], ferramentas_cli: Optional[List[str]]) -> List[str]:
+    """Deriva ferramentas permitidas exigindo evidência de uso ensinado.
+    Regra: ferramenta entra se aparece como 'demonstrado' em pelo menos 1 curso,
+    OU como 'praticado' em pelo menos 2 cursos. 'apenas_mencionado' é descartado.
+    """
     if isinstance(ferramentas_cli, list) and ferramentas_cli:
         return ferramentas_cli
-    seen = set()
+
+    contagem: Dict[str, Dict[str, int]] = {}  # titulo_lower -> {titulo, demonstrado, praticado}
     for c in resumos:
         arr = (c.get("resumo", {}) or {}).get("ferramentas_ou_bibliotecas", []) or []
         for item in arr:
-            s = str(item).strip()
-            if s:
-                seen.add(s)
-    if not seen:
-        # fallback leve
-        return [
-            "SQL (SQLite)", "Pandas", "Planilhas", "Power BI / Tableau",
-            "Matplotlib / Plotly", "CLI", "dbt", "scikit-learn",
-        ]
-    return sorted(seen)
+            if isinstance(item, dict):
+                titulo = str(item.get("titulo", "") or "").strip()
+                prof = str(item.get("profundidade", "") or "").strip()
+            elif isinstance(item, str):
+                titulo = item.strip()
+                prof = "apenas_mencionado"
+            else:
+                continue
+            if not titulo or prof not in PROFUNDIDADE_RANK:
+                continue
+            key = titulo.lower()
+            entry = contagem.setdefault(key, {"titulo": titulo, "demonstrado": 0, "praticado": 0})
+            if prof == "demonstrado":
+                entry["demonstrado"] += 1
+            elif prof == "praticado":
+                entry["praticado"] += 1
+
+    # Threshold: precisa de evidência em pelo menos 2 cursos (uso ensinado em mais de uma aula).
+    # Isso elimina ferramentas que apareceram demonstradas só uma vez (provavelmente passagem rápida).
+    aprovadas = [
+        e["titulo"]
+        for e in contagem.values()
+        if e["demonstrado"] >= 2 or (e["demonstrado"] + e["praticado"]) >= 3
+    ]
+
+    if not aprovadas:
+        # Fallback conservador: carreira é conceitual, sem programação
+        return ["Planilhas (Excel/Google Sheets)", "Editor de texto (Word/Google Docs)", "Draw.io"]
+    return sorted(aprovadas)
+
 
 def _carreira_envolve_dados(carreira: str, ferramentas: List[str], resumos: List[Dict[str, Any]]) -> bool:
     carreira_l = (carreira or "").lower()
@@ -187,13 +251,18 @@ def _carreira_envolve_dados(carreira: str, ferramentas: List[str], resumos: List
     gatilhos_ferr = ["sql", "pandas", "spark", "hive", "power bi", "tableau", "dbt", "airflow"]
     if any(any(g in f for g in gatilhos_ferr) for f in ferr_l):
         return True
-    # olha tópicos/conceitos
+    # Olha tópicos/conceitos/habilidades dos resumos. Para campos enriquecidos, considera só
+    # itens com profundidade >= praticado (apenas_mencionado é poluição).
     for c in resumos:
-        for k in ("topicos", "conceitos_chave", "habilidades"):
-            arr = (c.get("resumo") or {}).get(k, []) or []
-            joined = " ".join([str(x).lower() for x in arr])
-            if any(g in joined for g in ["sql", "dataset", "pandas", "etl", "pipeline", "visualização", "visualizacao", "bi"]):
-                return True
+        r = c.get("resumo") or {}
+        # topicos é string-list
+        joined = " ".join(str(x).lower() for x in r.get("topicos", []) or [])
+        # conceitos_chave e habilidades são objeto-list — pega só títulos com prof >= praticado
+        for k in ("conceitos_chave", "habilidades"):
+            objs = _filtrar_objetos_por_profundidade(r.get(k, []), min_rank=2)
+            joined += " " + " ".join(str(o.get("titulo", "")).lower() for o in objs)
+        if any(g in joined for g in ["sql", "dataset", "pandas", "etl", "pipeline", "visualização", "visualizacao", "bi"]):
+            return True
     return False
 
 # =========================
@@ -204,9 +273,11 @@ def system_prompt_aula3_txt() -> str:
 Sua tarefa é gerar a **Aula 3 – “03.Prova prática”** de um curso de Checkpoint, utilizando **exclusivamente** as informações presentes nos **resumos dos cursos do nível** (entrada do usuário).
 
 Regras gerais (mantenha TODAS):
+- **Autoridade da lista de ferramentas (REGRA DURA)**: a lista "Ferramentas permitidas" recebida no user prompt é DEFINITIVA. Use APENAS ferramentas dessa lista. **NÃO extraia** ferramentas adicionais dos resumos. Os resumos foram pré-filtrados para você por profundidade pedagógica, mas mesmo assim podem conter itens classificados como "apenas_mencionado" — esses NÃO foram ensinados de verdade no curso e estão PROIBIDOS na prova. Se uma ferramenta não está na lista "Ferramentas permitidas", ela não foi ensinada e não pode aparecer.
+- **Profundidade dos itens**: nos resumos, cada habilidade/conceito/exemplo vem com `profundidade` ∈ {`demonstrado`, `praticado`, `apenas_mencionado`}. Construa entregáveis APENAS sobre o que está como `demonstrado` ou `praticado`. Itens `apenas_mencionado` podem ser referenciados em texto, mas nunca pedidos como tarefa.
 - **Cobertura do nível**: inclua ao longo das etapas ao menos **um item** que mobilize **cada curso** do nível (faça mapeamento ao final). NÃO UTILIZE FERRAMENTAS DE NUVEM (AWS, Amazon, Azure, GCP, Google Cloud Platform e qualquer serviço derivado destes grandes serviços) que geram custos para os alunos.
 - **Não invente conteúdo**: não introduza ferramentas, conceitos ou técnicas que **não apareçam** nos resumos; apenas adapte e combine o que já foi visto.
-- **Ferramentas e prática**: cada etapa deve **usar ao menos uma ferramenta** coerente com os resumos (ex.: SQL/SQLite, Pandas, planilhas, BI, CLI, APIs, versionamento, testes etc.).
+- **Ferramentas e prática**: cada etapa deve **usar ao menos uma ferramenta da lista "Ferramentas permitidas"**. Se a lista contém apenas ferramentas não-programáticas (planilhas, documentos, diagramação), as etapas devem ser entregas documentais/diagramáticas — **não** force scripts Python ou consultas SQL.
 - **Dados (APENAS quando aplicável)**:
   - **Somente gere datasets se a carreira envolver dados** (ex.: Análise/Engenharia de Dados, BI, Ciência de Dados). Caso contrário, **não gere datasets** e foque em artefatos coerentes (APIs, scripts, CLI, configs, deploy, testes, automações, documentação técnica).
   - Se gerar datasets, forneça **um ou mais arquivos** **in-line** (CSV ou JSON) com **entre 30 e 120 linhas de dados** (não conte o cabeçalho). Use dados **fictícios e não sensíveis**.
@@ -301,12 +372,20 @@ def user_prompt_aula3_txt(
 # =========================
 # OpenAI helper
 # =========================
+def _model_supports_temperature(model: str) -> bool:
+    """gpt-5* e reasoning models (o1, o3, o4) só aceitam temperature default (1)."""
+    m = (model or "").lower()
+    return not (m.startswith("gpt-5") or m.startswith("o1") or m.startswith("o3") or m.startswith("o4"))
+
+
 def _chat(client: OpenAI, model: str, system: str, user: str) -> str:
-    resp = client.chat.completions.create(
-        model=model,
-        temperature=TEMP,
-        messages=[{"role":"system","content":system},{"role":"user","content":user}],
-    )
+    kwargs: Dict[str, Any] = {
+        "model": model,
+        "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+    }
+    if _model_supports_temperature(model):
+        kwargs["temperature"] = TEMP
+    resp = client.chat.completions.create(**kwargs)
     return resp.choices[0].message.content or ""
 
 # =========================

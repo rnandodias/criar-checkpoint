@@ -47,13 +47,13 @@ if sys.platform == "win32":
 # =========================
 # Configuração de modelos
 # =========================
-# Criativo (ideias + transformação p/ múltipla escolha): mantém gpt-4o
-MODEL_IDEAS = "gpt-4o"
-MODEL_FORMAT = "gpt-4o-2024-08-06"
+# Geração crítica (ideias + transformação em múltipla escolha): top de linha
+MODEL_IDEAS = "gpt-5"
+MODEL_FORMAT = "gpt-5"
 TEMPERATURE_IDEAS = 0.0
 TEMPERATURE_FORMAT = 0.0
 
-# Ranqueamento (apenas dificuldade): modelo barato
+# Ranqueamento (apenas dificuldade — não vale gastar): modelo barato
 MODEL_RANK = "gpt-4o-mini"
 TEMPERATURE_RANK = 0.0
 
@@ -62,15 +62,18 @@ SINGLE_PASS_CHAR_LIMIT = 300_000
 INPUT_DIR = Path(__file__).resolve().parent.parent / "output" / "checkpoints"
 OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output" / "cursos_checkpoint"
 
-SCHEMA_KEYS = [
+STRING_KEYS = [
     "objetivos",
     "topicos",
+    "erros_ou_armadilhas_comuns",
+]
+OBJECT_KEYS = [
     "habilidades",
     "ferramentas_ou_bibliotecas",
     "conceitos_chave",
     "exemplos_relevantes",
-    "erros_ou_armadilhas_comuns",
 ]
+SCHEMA_KEYS = STRING_KEYS + OBJECT_KEYS
 
 # =========================
 # Prompts VERBATIM (mantidos)
@@ -298,15 +301,23 @@ def _safe_json_loads(s: str) -> Optional[Any]:
         except Exception:
             return None
 
+def _model_supports_temperature(model: str) -> bool:
+    """gpt-5* e reasoning models (o1, o3, o4) só aceitam temperature default (1)."""
+    m = (model or "").lower()
+    return not (m.startswith("gpt-5") or m.startswith("o1") or m.startswith("o3") or m.startswith("o4"))
+
+
 def _chat(client: OpenAI, model: str, system: str, user: str, temperature: float = 0.0) -> str:
-    resp = client.chat.completions.create(
-        model=model,
-        temperature=temperature,
-        messages=[
+    kwargs: Dict[str, Any] = {
+        "model": model,
+        "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
-    )
+    }
+    if _model_supports_temperature(model):
+        kwargs["temperature"] = temperature
+    resp = client.chat.completions.create(**kwargs)
     return resp.choices[0].message.content or ""
 
 def _slugify(s: str) -> str:
@@ -318,6 +329,29 @@ def _slugify(s: str) -> str:
 # =========================
 # Conversão de RESUMO -> "transcrição" sintética
 # =========================
+
+def _render_resumo_item(it: Any) -> Optional[str]:
+    """Renderiza um item de resumo como linha legível.
+    Aceita string (campos simples) ou objeto {titulo, profundidade, trecho_evidencia}.
+    """
+    if isinstance(it, str):
+        s = it.strip()
+        return s or None
+    if isinstance(it, dict):
+        titulo = str(it.get("titulo", "") or "").strip()
+        if not titulo:
+            return None
+        prof = str(it.get("profundidade", "") or "").strip()
+        trecho = str(it.get("trecho_evidencia", "") or "").strip()
+        partes = [titulo]
+        if prof:
+            partes.append(f"[{prof}]")
+        s = " ".join(partes)
+        if trecho:
+            s += f": {trecho}"
+        return s
+    return None
+
 
 def resumo_to_transcription_text(course: Dict[str, Any]) -> str:
     nome = str(course.get("nome") or f"Curso {course.get('id')}")
@@ -332,9 +366,9 @@ def resumo_to_transcription_text(course: Dict[str, Any]) -> str:
             label = k.replace('_', ' ').capitalize()
             lines.append(f"{label}:")
             for it in items:
-                it_str = str(it).strip()
-                if it_str:
-                    lines.append(f"- {it_str}")
+                rendered = _render_resumo_item(it)
+                if rendered:
+                    lines.append(f"- {rendered}")
     text = "\n".join(lines)
     if len(text) > SINGLE_PASS_CHAR_LIMIT:
         text = text[:SINGLE_PASS_CHAR_LIMIT]
@@ -462,14 +496,30 @@ def _load_resumos_via_cli(path: str) -> List[Dict[str, Any]]:
     return json.loads(p.read_text(encoding="utf-8"))
 
 def _compact_for_ranking(courses: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Para o ranqueamento de dificuldade só interessam os títulos dos itens —
+    profundidade/evidência seriam ruído."""
     keep_keys = ["conceitos_chave", "topicos", "habilidades"]
     compact = []
     for c in courses:
         resumo = c.get("resumo", {}) or {}
+        bloco: Dict[str, List[str]] = {}
+        for k in keep_keys:
+            items = resumo.get(k, []) or []
+            titulos: List[str] = []
+            for it in items:
+                if isinstance(it, str):
+                    s = it.strip()
+                    if s:
+                        titulos.append(s)
+                elif isinstance(it, dict):
+                    t = str(it.get("titulo", "") or "").strip()
+                    if t:
+                        titulos.append(t)
+            bloco[k] = titulos
         compact.append({
             "id": c.get("id"),
             "nome": c.get("nome"),
-            "resumo": {k: resumo.get(k, []) for k in keep_keys}
+            "resumo": bloco,
         })
     return compact
 

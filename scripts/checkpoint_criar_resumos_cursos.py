@@ -19,7 +19,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from dotenv import load_dotenv
@@ -33,19 +33,16 @@ if sys.platform == "win32":
 # Configuração
 # =========================
 TEMPERATURE = 0.0
-MODEL = "gpt-4o"
+MODEL = "gpt-5"
 # Se um vídeo passar desse limite, aplicamos fallback de chunking com overlap leve
-SINGLE_PASS_CHAR_LIMIT = 300000  # ~ seguro para 4o, evitando estouro
+SINGLE_PASS_CHAR_LIMIT = 300000
 CHUNK_SIZE = 180000
 CHUNK_OVERLAP = 8000
 MAX_WORKERS = 4  # paralelismo por curso (ajuste se houver rate limit)
 
-# MODEL = "gpt-4o-mini"
-# # Se um vídeo passar desse limite, aplicamos fallback de chunking com overlap leve
-# SINGLE_PASS_CHAR_LIMIT = 14000  # ~ seguro para 4o-mini, evitando estouro
-# CHUNK_SIZE = 10000
-# CHUNK_OVERLAP = 1000
-# MAX_WORKERS = 6  # paralelismo por curso (ajuste se houver rate limit)
+# Alternativas (descomente para baratear):
+# MODEL = "gpt-4o"
+# MODEL = "gpt-4o-mini"; SINGLE_PASS_CHAR_LIMIT = 14000; CHUNK_SIZE = 10000; CHUNK_OVERLAP = 1000; MAX_WORKERS = 6
 
 INPUT_DIR = Path(__file__).resolve().parent.parent / "trilha"
 OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output" / "checkpoints"
@@ -96,19 +93,53 @@ Resuma o TEXTO a seguir em **JSON válido e compacto**, com este schema exato (s
 {
   "objetivos": ["o que o aluno deve alcançar"],
   "topicos": ["principais assuntos abordados"],
-  "habilidades": ["tarefas que o aluno passa a saber executar"],
-  "ferramentas_ou_bibliotecas": ["ferramentas, libs, serviços citados"],
-  "conceitos_chave": ["termos, métricas, fórmulas, padrões"],
-  "exemplos_relevantes": ["exemplos práticos mencionados (dados, trechos de código, comandos, nomes de arquivos)"],
-  "erros_ou_armadilhas_comuns": ["pontos de atenção, limitações, erros frequentes"]
+  "erros_ou_armadilhas_comuns": ["pontos de atenção, limitações, erros frequentes"],
+  "habilidades": [
+    {"titulo": "tarefa que o aluno passa a saber executar", "profundidade": "demonstrado|praticado|apenas_mencionado", "trecho_evidencia": "citação curta da transcrição (ou string vazia se apenas_mencionado sem exemplo)"}
+  ],
+  "ferramentas_ou_bibliotecas": [
+    {"titulo": "ferramenta/lib/serviço", "profundidade": "demonstrado|praticado|apenas_mencionado", "trecho_evidencia": "citação curta"}
+  ],
+  "conceitos_chave": [
+    {"titulo": "termo, métrica, padrão", "profundidade": "demonstrado|praticado|apenas_mencionado", "trecho_evidencia": "citação curta"}
+  ],
+  "exemplos_relevantes": [
+    {"titulo": "nome curto do exemplo", "profundidade": "demonstrado|praticado|apenas_mencionado", "trecho_evidencia": "citação curta descrevendo o exemplo"}
+  ]
 }
 
-Regras adicionais:
+Regras de classificação (CRÍTICO — afeta avaliação posterior; SEJA RIGOROSO):
+
+- "demonstrado": **só classifique assim se houver EVIDÊNCIA OBSERVÁVEL na transcrição** de um dos seguintes:
+  (a) código/comando concreto exibido (ex.: `import pandas as pd`, `pd.read_csv('x')`, `SELECT * FROM t`)
+  (b) ação executada passo-a-passo descrita (ex.: "abro o Draw.io, arrasto o componente X, conecto em Y")
+  (c) saída/resultado mostrado (ex.: "olhem o resultado: o DataFrame tem 30 linhas")
+  (d) dataset/arquivo manipulado com nome e operação (ex.: "vamos abrir clientes.csv e calcular a média da coluna idade")
+  Frases tipo "vamos usar X", "utilizaremos X", "traremos para uma aplicação X", "reporta via X" são **NÃO** demonstrado — são apenas_mencionado, mesmo que o instrutor diga que vai usar.
+
+- "praticado": o curso PROPÕE ao aluno executar uma ação com o item (exercício, atividade, quiz prático, instrução clara "agora você faz X").
+
+- "apenas_mencionado": o item é citado/nomeado/recomendado, mas a transcrição NÃO contém código nem passo-a-passo executado nem resultado mostrado.
+  Inclui aqui: "domínio em SQL é desejável", "usaremos Power BI", "ferramenta como Tableau", "você precisa conhecer Python".
+
+EXEMPLOS DE DECISÃO (siga rigorosamente):
+- Transcrição: "import pandas as pd\ndf = pd.read_parquet('dados.parquet')" → Pandas: **demonstrado**
+- Transcrição: "Utilizaremos a linguagem Python ao longo do curso" → Python: **apenas_mencionado**
+- Transcrição: "abriremos o Draw.io e arrastaremos o componente até a área de desenho" → Draw.io: **demonstrado**
+- Transcrição: "podemos relatar via Power BI ou outra ferramenta de BI" → Power BI: **apenas_mencionado**
+- Transcrição: "agora é sua vez: crie uma planilha Excel com 3 colunas" → Excel: **praticado**
+- Transcrição: "existem ferramentas como SQL Server, Snowflake e Redshift" → todos: **apenas_mencionado**
+
+Na dúvida, classifique como **apenas_mencionado**. Falsos demonstrados são MUITO piores que falsos mencionados.
+
+Regras gerais:
 - Mantenha nomes de classes, funções, comandos, libs e serviços exatamente como aparecem.
-- Se houver datasets, aponte nomes e principais colunas/atributos.
-- Se houver métricas (ex.: R², MAE, RMSE, MAPE), registre.
+- "trecho_evidencia": citação curta (1-2 frases) ou paráfrase próxima do que foi dito/feito. Se "apenas_mencionado" e sem exemplo, retorne string vazia.
+- Se houver datasets, registre nomes e colunas em exemplos_relevantes (com profundidade adequada).
+- Se houver métricas (R², MAE, RMSE, MAPE etc.), registre em conceitos_chave.
 - Se um item não aparecer no texto, retorne lista vazia para esse campo.
 - Listas com 3 a 10 itens, quando possível.
+- Não duplique itens dentro do mesmo campo.
 
 TEXTO:
 {TEXTO}
@@ -130,44 +161,117 @@ def _dedup_keep_order(items: List[str]) -> List[str]:
             out.append(x)
     return out
 
-SCHEMA_KEYS = [
+# Campos com lista de strings simples
+STRING_KEYS = [
     "objetivos",
     "topicos",
+    "erros_ou_armadilhas_comuns",
+]
+# Campos enriquecidos: lista de objetos {titulo, profundidade, trecho_evidencia}
+OBJECT_KEYS = [
     "habilidades",
     "ferramentas_ou_bibliotecas",
     "conceitos_chave",
     "exemplos_relevantes",
-    "erros_ou_armadilhas_comuns",
 ]
+SCHEMA_KEYS = STRING_KEYS + OBJECT_KEYS
 
-EMPTY_SCHEMA = {k: [] for k in SCHEMA_KEYS}
+PROFUNDIDADES = ("demonstrado", "praticado", "apenas_mencionado")
+PROFUNDIDADE_RANK = {"demonstrado": 3, "praticado": 2, "apenas_mencionado": 1}
+
+EMPTY_SCHEMA: Dict[str, List[Any]] = {k: [] for k in SCHEMA_KEYS}
 
 
-def _coerce_schema(data: Any) -> Dict[str, List[str]]:
-    """Garante que o JSON tenha o schema correto e valores como listas de strings."""
+def _coerce_string_list(v: Any) -> List[str]:
+    if isinstance(v, list):
+        return [str(x).strip() for x in v if str(x).strip()]
+    if isinstance(v, str) and v.strip():
+        return [v.strip()]
+    return []
+
+
+def _coerce_object_item(x: Any) -> Optional[Dict[str, str]]:
+    """Normaliza um item de campo enriquecido para {titulo, profundidade, trecho_evidencia}."""
+    if isinstance(x, str):
+        t = x.strip()
+        if not t:
+            return None
+        return {"titulo": t, "profundidade": "apenas_mencionado", "trecho_evidencia": ""}
+    if not isinstance(x, dict):
+        return None
+    titulo = str(x.get("titulo", "") or "").strip()
+    if not titulo:
+        return None
+    prof = str(x.get("profundidade", "") or "").strip().lower()
+    if prof not in PROFUNDIDADES:
+        prof = "apenas_mencionado"
+    trecho = str(x.get("trecho_evidencia", "") or "").strip()
+    return {"titulo": titulo, "profundidade": prof, "trecho_evidencia": trecho}
+
+
+def _coerce_object_list(v: Any) -> List[Dict[str, str]]:
+    if not isinstance(v, list):
+        return []
+    out: List[Dict[str, str]] = []
+    for x in v:
+        item = _coerce_object_item(x)
+        if item:
+            out.append(item)
+    return out
+
+
+def _coerce_schema(data: Any) -> Dict[str, List[Any]]:
+    """Garante que o JSON tenha o schema correto:
+    - STRING_KEYS: lista de strings
+    - OBJECT_KEYS: lista de {titulo, profundidade, trecho_evidencia}
+    """
     if not isinstance(data, dict):
-        return {**EMPTY_SCHEMA}
-    result: Dict[str, List[str]] = {}
-    for k in SCHEMA_KEYS:
-        v = data.get(k, [])
-        if isinstance(v, list):
-            result[k] = [str(x).strip() for x in v if str(x).strip()]
-        elif isinstance(v, str) and v.strip():
-            result[k] = [v.strip()]
-        else:
-            result[k] = []
+        return {k: [] for k in SCHEMA_KEYS}
+    result: Dict[str, List[Any]] = {}
+    for k in STRING_KEYS:
+        result[k] = _coerce_string_list(data.get(k, []))
+    for k in OBJECT_KEYS:
+        result[k] = _coerce_object_list(data.get(k, []))
     return result
 
 
-def _merge_summaries(json_list: List[Dict[str, List[str]]]) -> Dict[str, List[str]]:
-    merged = {k: [] for k in SCHEMA_KEYS}
+def _merge_object_lists(items: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """Dedup por título (case-insensitive). Mantém o item de maior profundidade.
+    Se profundidades iguais, concatena evidências distintas (separadas por ' || ')."""
+    by_key: Dict[str, Dict[str, str]] = {}
+    for it in items or []:
+        key = it["titulo"].lower()
+        atual = by_key.get(key)
+        if atual is None:
+            by_key[key] = dict(it)
+            continue
+        rank_novo = PROFUNDIDADE_RANK.get(it["profundidade"], 0)
+        rank_atual = PROFUNDIDADE_RANK.get(atual["profundidade"], 0)
+        if rank_novo > rank_atual:
+            # Substitui mantendo evidência do item mais profundo
+            by_key[key] = dict(it)
+        elif rank_novo == rank_atual:
+            # Mesma profundidade: concatena evidências distintas
+            ev_existing = atual.get("trecho_evidencia", "").strip()
+            ev_novo = it.get("trecho_evidencia", "").strip()
+            if ev_novo and ev_novo not in ev_existing:
+                if ev_existing:
+                    atual["trecho_evidencia"] = f"{ev_existing} || {ev_novo}"
+                else:
+                    atual["trecho_evidencia"] = ev_novo
+    return list(by_key.values())
+
+
+def _merge_summaries(json_list: List[Dict[str, List[Any]]]) -> Dict[str, List[Any]]:
+    merged: Dict[str, List[Any]] = {k: [] for k in SCHEMA_KEYS}
     for j in json_list:
         j = _coerce_schema(j)
         for k in SCHEMA_KEYS:
             merged[k].extend(j.get(k, []))
-    # dedup preservando ordem
-    for k in SCHEMA_KEYS:
+    for k in STRING_KEYS:
         merged[k] = _dedup_keep_order(merged[k])
+    for k in OBJECT_KEYS:
+        merged[k] = _merge_object_lists(merged[k])
     return merged
 
 
@@ -192,14 +296,19 @@ def _split_with_overlap(text: str, size: int, overlap: int) -> List[str]:
 # OpenAI helper
 # =========================
 
+def _model_supports_temperature(model: str) -> bool:
+    """gpt-5* e reasoning models (o1, o3, o4) só aceitam temperature default (1)."""
+    m = (model or "").lower()
+    return not (m.startswith("gpt-5") or m.startswith("o1") or m.startswith("o3") or m.startswith("o4"))
+
+
 def call_chat(messages: List[Dict[str, str]], *, retries: int = 3, backoff: float = 2.0) -> str:
+    kwargs: Dict[str, Any] = {"model": MODEL, "messages": messages}
+    if _model_supports_temperature(MODEL):
+        kwargs["temperature"] = TEMPERATURE
     for attempt in range(retries):
         try:
-            resp = client.chat.completions.create(
-                model=MODEL,
-                temperature=TEMPERATURE,
-                messages=messages,
-            )
+            resp = client.chat.completions.create(**kwargs)
             return resp.choices[0].message.content or ""
         except Exception as e:
             if attempt == retries - 1:
