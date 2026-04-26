@@ -3,21 +3,24 @@
 Projeto isolado para **gerar atividades de Checkpoint** (prova teórica e prova prática) dos níveis de carreira da Alura, de ponta a ponta:
 
 1. **Coleta** as transcrições dos vídeos dos cursos diretamente da plataforma (scraping).
-2. **Resume** cada curso em um schema estruturado.
+2. **Resume** cada curso em conteúdos testáveis.
 3. **Gera** a prova teórica (múltipla escolha) e a prova prática (Aula 3 do Checkpoint).
+4. **Publica** as atividades direto no admin da Alura via automação Playwright.
 
-Todo o fluxo acontece neste único projeto — não é mais necessário movimentar arquivos manualmente entre repositórios.
+Todo o fluxo acontece neste único projeto.
 
 ---
 
 ## Fluxo completo (ponta a ponta)
 
 ```text
-┌──────────────────────────────┐  JSON de transcrições   ┌────────────────────────────┐  JSON resumo  ┌──────────────────────────┐
-│ 1) obter_transcricoes_cursos │ ───────────────────────▶│ 2) checkpoint_criar_resumos│ ────────────▶ │ 3) gerar_prova_teorica   │
-│    (Playwright + Alura)      │   trilha/<nome>.json    │    _cursos (OpenAI)        │  output/...   │    gerar_prova_pratica   │
-└──────────────────────────────┘                         └────────────────────────────┘               └──────────────────────────┘
+┌──────────────────────────┐  JSON transcrições  ┌────────────────────┐  JSON resumo  ┌────────────────────────┐  TXT prova  ┌─────────────────────────┐
+│ 1) obter_transcricoes    │ ───────────────────▶│ 2) checkpoint_criar│ ────────────▶ │ 3) gerar_prova_teorica │ ──────────▶ │ 5) upload_checkpoint    │
+│    Playwright + Alura    │  trilha/<nome>.json │    resumos (LLM)   │  output/...   │ 4) gerar_prova_pratica │             │    Playwright + admin   │
+└──────────────────────────┘                     └────────────────────┘               └────────────────────────┘             └─────────────────────────┘
 ```
+
+A etapa 2 aceita modelos OpenAI (`gpt-*`, `o1/o3/o4-*`) **ou** Anthropic (`claude-*`) — o provider é escolhido pelo prefixo do MODEL no topo de cada script. Para Anthropic, a etapa 2 e 3 usam Message Batches API automaticamente (50% off).
 
 ### 1) Coletar as transcrições dos cursos
 
@@ -38,11 +41,15 @@ python scripts/obter_transcricoes_cursos.py --listar
 
 ### 2) Gerar os resumos dos cursos
 
-- Edite a variável `INPUT_FILES` no topo de [`scripts/checkpoint_criar_resumos_cursos.py`](./scripts/checkpoint_criar_resumos_cursos.py) para apontar para o arquivo gerado na etapa 1.
-- Rode:
-
 ```bash
-python scripts/checkpoint_criar_resumos_cursos.py
+# Atalho via carreira/nível (monta o nome do arquivo automaticamente):
+python scripts/checkpoint_criar_resumos_cursos.py --carreira governanca_de_dados --nivel 1
+
+# Ou explicitando o(s) arquivo(s):
+python scripts/checkpoint_criar_resumos_cursos.py --input_files governanca_de_dados_nivel_1.json
+
+# Anthropic + batch ativo por padrão (50% off). Para forçar sync (debug):
+python scripts/checkpoint_criar_resumos_cursos.py --carreira governanca_de_dados --nivel 1 --no-batch
 ```
 
 - Saída: `output/checkpoints/resumos_<nome>.json` (e `.jsonl`).
@@ -70,6 +77,30 @@ python scripts/gerar_prova_pratica_do_zero.py \
 
 - Saída: `output/cursos_checkpoint/prova_pratica_<slug_carreira>_nivel_<n>.txt`
 
+### 5) Publicar no admin da Alura (Playwright)
+
+Cria seções e atividades no curso de checkpoint (`/admin/courses/v2/<curso_id>`).
+
+```bash
+# Cria as 3 seções (Apresentação, Prova teórica, Prova prática) e marca a teórica como prova
+python scripts/upload_checkpoint_alura.py --curso_id <ID> --etapa criar_secoes
+
+# Cria a atividade "Etapas do projeto" (Explicação) na seção Apresentação
+python scripts/upload_checkpoint_alura.py --curso_id <ID> --etapa criar_atividade_apresentacao --nivel 1
+
+# Cria 1 atividade "Única escolha" por exercício do TXT da prova teórica
+python scripts/upload_checkpoint_alura.py --curso_id <ID> --etapa criar_atividades_prova_teorica \
+  --carreira "Governança de Dados" --nivel 1
+# Para validar antes de processar todos: --limite 1; para retomar após criação parcial: --offset N
+
+# Cria 1 atividade "Explicação" por subtítulo da prova prática + 1 Conclusão hardcoded
+python scripts/upload_checkpoint_alura.py --curso_id <ID> --etapa criar_atividades_prova_pratica \
+  --carreira "Governança de Dados" --nivel 1
+```
+
+- Modo padrão: janela visível (headful). Use `--headless` para rodar em background.
+- Idempotência parcial: a criação de seções e atividades **não é reversível** — um rerun cria duplicatas. Use `--limite N` / `--offset N` para retomar.
+
 ---
 
 ## Estrutura do projeto
@@ -86,7 +117,8 @@ criar-checkpoint/
 │   ├── obter_transcricoes_cursos.py          # 1) scraping das transcrições
 │   ├── checkpoint_criar_resumos_cursos.py    # 2) resumos dos cursos
 │   ├── gerar_prova_teorica_do_zero.py        # 3) prova teórica (múltipla escolha)
-│   └── gerar_prova_pratica_do_zero.py        # 4) prova prática (Aula 3)
+│   ├── gerar_prova_pratica_do_zero.py        # 4) prova prática (Aula 3)
+│   └── upload_checkpoint_alura.py            # 5) publica seções/atividades no admin Alura
 ├── trilha/                          # saída da etapa 1 (entrada da etapa 2)
 └── output/
     ├── checkpoints/                 # saída da etapa 2 (entrada das etapas 3 e 4)
@@ -98,8 +130,10 @@ criar-checkpoint/
 ## Pré-requisitos
 
 - Python 3.10+
-- Conta ativa na plataforma da Alura (email + senha) — para o scraping.
-- Chave válida da **OpenAI API** — para os resumos e geração das provas.
+- Conta ativa na plataforma da Alura (email + senha) — para o scraping e o upload no admin.
+- **Pelo menos uma** chave válida de LLM:
+  - **OpenAI API** (`OPENAI_CREDENTIALS`) — usada quando o MODEL começa com `gpt-*` ou `o1/o3/o4-*`.
+  - **Anthropic API** (`ANTHROPIC_API_KEY`) — usada quando o MODEL começa com `claude-*`. Configuração premium atual usa Claude Opus 4.7 / Sonnet 4.6 / Haiku 4.5.
 
 ## Instalação
 
@@ -142,28 +176,35 @@ Faz login na Alura via Playwright, navega pelas seções de cada curso informado
 
 ### `scripts/checkpoint_criar_resumos_cursos.py`
 
-Lê os JSONs de transcrições da pasta [`trilha/`](./trilha/) e gera, para cada curso, um resumo estruturado:
+Lê os JSONs de transcrições da pasta [`trilha/`](./trilha/) e gera, para cada curso, um resumo de **conteúdos testáveis** (filtro qualitativo: só entra o que cabe virar questão de prova):
 
 ```json
 {
-  "objetivos": [...],
-  "topicos": [...],
-  "habilidades": [...],
-  "ferramentas_ou_bibliotecas": [...],
-  "conceitos_chave": [...],
-  "exemplos_relevantes": [...],
-  "erros_ou_armadilhas_comuns": [...]
+  "tema_central": "frase curta sobre o que o curso aborda",
+  "conteudos_testaveis": [
+    {
+      "topico": "Diferenciação entre data owner, steward e custodian",
+      "nivel": "central",
+      "tipo": "conceitual",
+      "habilidade": "Atribuir responsabilidades a cada papel em cenário concreto",
+      "evidencia_de_ensino": "Aula dedicada com organograma e exercício de classificação.",
+      "armadilhas_comuns": ["Confundir owner com steward"]
+    }
+  ],
+  "ferramentas_usadas": ["Excel", "Draw.io"]
 }
 ```
 
 - Uma chamada ao LLM por vídeo (com fallback de chunking para vídeos muito longos).
 - Paralelismo por vídeo via `ThreadPoolExecutor` (ajuste `MAX_WORKERS` conforme rate limit).
-- Modelo padrão: `gpt-4o` (pode trocar para `gpt-4o-mini` editando as constantes do topo).
+- Provider escolhido pelo prefixo do MODEL (`gpt-*`/`o*-*` → OpenAI, `claude-*` → Anthropic).
+- Configuração premium padrão: `claude-opus-4-7` (Anthropic). Alternativas comentadas no topo do script.
+- Para Anthropic com ≥2 vídeos por curso: usa Message Batches API automaticamente (50% off). Cache também ativo (90% off em hits) — funciona apenas se o block estático atinge o mínimo (1024 tokens Sonnet/Opus, 2048 Haiku).
 
-**Como usar:** edite `INPUT_FILES` no topo do script para listar os arquivos a processar e execute:
+**Como usar:**
 
 ```bash
-python scripts/checkpoint_criar_resumos_cursos.py
+python scripts/checkpoint_criar_resumos_cursos.py --carreira governanca_de_dados --nivel 1
 ```
 
 ### `scripts/gerar_prova_teorica_do_zero.py`
@@ -172,10 +213,12 @@ Gera a **prova teórica** (múltipla escolha, 4 alternativas, com justificativas
 
 Fluxo interno:
 
-1. Gera **ideias de questões** por curso (`gpt-4o`).
-2. Transforma cada ideia em **múltipla escolha** (`gpt-4o-2024-08-06`).
+1. Gera **ideias de questões** por curso (`MODEL_IDEAS`, default `claude-sonnet-4-6`).
+2. Transforma cada ideia em **múltipla escolha** (`MODEL_FORMAT`, default `claude-sonnet-4-6`).
 3. (Opcional) Ajusta o tamanho das alternativas com `--ajustar_alternativas`.
-4. Ranqueia por **dificuldade** 1–5 (`gpt-4o-mini`) e ordena ascendente.
+4. Ranqueia por **dificuldade** 1–5 (`MODEL_RANK`, default `claude-haiku-4-5-20251001`) e ordena ascendente.
+
+Para Anthropic, fases 1 e 2 viram batch automaticamente quando há ≥2 cursos/questões. Flag `--no-batch` força sync.
 
 Domínios: usa uma lista padrão de empresas fictícias (Bytebank, Serenatto, Freelando, etc.). Pode-se passar `--domains_arquivo caminho.json` para sobrescrever.
 
@@ -199,6 +242,8 @@ Gera a **prova prática** (Aula 3 do Checkpoint) em formato texto estruturado, c
 - Matriz de cobertura (auditoria) mapeando cada curso do nível às etapas.
 - Datasets inline (CSV/JSON) **somente** quando a carreira envolver dados (heurística automática, override com `--modo_dados com|sem|auto`).
 - Regra: **não** usa ferramentas de nuvem pagas (AWS, Azure, GCP etc.).
+- **Perfil da carreira** (programatica vs conceitual): heurística baseada em % de `conteudos_testaveis` com `tipo: procedimental`. Em carreiras conceituais (ex.: governança), o system prompt orienta entregáveis documentais/diagramáticos.
+- Modelo padrão: `claude-opus-4-7` (1 chamada apenas, sem batch).
 
 ```bash
 python scripts/gerar_prova_pratica_do_zero.py \
@@ -208,6 +253,26 @@ python scripts/gerar_prova_pratica_do_zero.py \
   --modo_dados auto --verbose
 ```
 
+### `scripts/upload_checkpoint_alura.py`
+
+Automação Playwright que cria seções e atividades direto no admin da Alura. Cobre 5 etapas distintas:
+
+| Etapa CLI | O que faz |
+|---|---|
+| `criar_secoes` | Cria as 3 seções (Apresentação, Prova teórica, Prova prática) e marca a Prova teórica como `É prova?` |
+| `marcar_prova_teorica` | Apenas marca o checkbox `É prova?` da seção Prova teórica (útil quando as seções já existem) |
+| `criar_atividade_apresentacao` | Cria 1 atividade Explicação "Etapas do projeto" na seção Apresentação |
+| `criar_atividades_prova_teorica` | Cria 1 atividade "Única escolha" por exercício do TXT da prova teórica |
+| `criar_atividades_prova_pratica` | Cria 1 atividade Explicação por subtítulo da prova prática (Descrição, Antes de começar, Preparando o ambiente, 4 Etapas) + 1 Conclusão hardcoded |
+
+Detalhes técnicos:
+
+- O admin usa **EasyMDE/CodeMirror** em todos os campos de markdown — o script preenche via `CodeMirror.setValue()` + `.save()`.
+- O dropdown de tipo é hierárquico (`select#chooseTask`); seleção via `data-task-enum` (HQ_EXPLANATION, SINGLE_CHOICE).
+- Alternativas usam names HTML específicos (`alternatives[N].text`, `alternatives[N].opinion`, `alternatives[N].correct`).
+- Login adapta-se a trackers lentos (usa `wait_until="domcontentloaded"` em vez de `load`).
+- Flags úteis: `--limite N` (processa apenas os N primeiros — validação inicial), `--offset N` (pula os N primeiros — retomada após criação parcial), `--headless` (sem janela).
+
 ---
 
 ## Convenções
@@ -216,3 +281,5 @@ python scripts/gerar_prova_pratica_do_zero.py \
 - **Nome dos arquivos de resumo:** `resumos_<nome_da_carreira>_nivel_<1|2|3>.json` — gerados automaticamente.
 - **Linguagem neutra nas questões:** prefira "pessoa desenvolvedora", "a empresa te contratou"; nunca "você foi contratado" ou masculino genérico.
 - **Fidelidade à aula:** nenhum dos scripts inventa conceitos — tudo é derivado dos resumos, que por sua vez vêm das transcrições.
+- **Schema dos resumos:** filtro qualitativo (`conteudos_testaveis` apenas), não catalogação exaustiva. Cada item tem `topico, nivel, tipo, habilidade, evidencia_de_ensino, armadilhas_comuns`.
+- **Switch de provider LLM:** definido pelo prefixo do MODEL no topo de cada script. `gpt-*`/`o1/o3/o4-*` → OpenAI; `claude-*` → Anthropic. Para Anthropic com várias chamadas, batch+cache automáticos.

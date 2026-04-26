@@ -32,6 +32,9 @@ output/cursos_checkpoint/*.txt
 output/cursos_checkpoint/*.md
 output/cursos_checkpoint/*.json
 
+# Spike / diagnóstico do upload Alura (HTMLs, screenshots de erro)
+tmp/
+
 # Manter as pastas no repositório
 !trilha/.gitkeep
 !output/checkpoints/.gitkeep
