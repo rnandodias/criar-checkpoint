@@ -1002,6 +1002,159 @@ def criar_atividades_prova_pratica(
         browser.close()
 
 
+def _listar_tarefas_da_secao(page: Page, course_id: int, section_id: int) -> List[dict]:
+    """Lista todas as tarefas (atividades) de uma seção. Retorna [{ordem, tipo, titulo, edit_url}]."""
+    tasks_url = f"https://cursos.alura.com.br/admin/course/v2/{course_id}/section/{section_id}/tasks"
+    page.goto(tasks_url, wait_until="domcontentloaded", timeout=60_000)
+    page.wait_for_load_state("networkidle", timeout=15_000)
+    js = """
+    () => Array.from(document.querySelectorAll('a[href*="/task/edit/"]')).map(a => {
+        const tr = a.closest('tr');
+        const cells = tr ? Array.from(tr.querySelectorAll('td')).map(td => td.textContent.trim()) : [];
+        return {
+            ordem: cells[0] || '',
+            tipo: cells[1] || '',
+            titulo: cells[2] || '',
+            edit_url: a.getAttribute('href') || '',
+        };
+    }).filter(t => t.edit_url)
+    """
+    return page.evaluate(js)
+
+
+def _definir_status_tarefa(page: Page, edit_url: str, status: str) -> str:
+    """Abre a página de edição da tarefa, muda Status (ACTIVE|INACTIVE) e salva.
+    Retorna a URL final."""
+    if status not in ("ACTIVE", "INACTIVE"):
+        raise ValueError(f"Status inválido: {status}")
+    full_url = edit_url if edit_url.startswith("http") else f"https://cursos.alura.com.br{edit_url}"
+    page.goto(full_url, wait_until="domcontentloaded", timeout=60_000)
+    page.wait_for_load_state("networkidle", timeout=15_000)
+
+    candidatos_select = [
+        "select[id='task.status']",
+        "select[name='status']",
+    ]
+    selected = False
+    for sel in candidatos_select:
+        try:
+            page.select_option(sel, value=status, timeout=5_000)
+            selected = True
+            break
+        except PWTimeoutError:
+            continue
+        except Exception:
+            continue
+    if not selected:
+        raise RuntimeError(f"Select de Status não encontrado em {full_url}")
+
+    saved = False
+    for sel in ["button:has-text('Salvar')", "input[type='submit'][value*='Salvar']", "button[type='submit']"]:
+        try:
+            page.click(sel, timeout=5_000)
+            saved = True
+            break
+        except PWTimeoutError:
+            continue
+    if not saved:
+        raise RuntimeError(f"Botão 'Salvar' não encontrado em {full_url}")
+    page.wait_for_load_state("networkidle", timeout=15_000)
+    return page.url
+
+
+def _resolve_manter_ativos_path(carreira: str, nivel: int, override: str = "") -> "Path":
+    from pathlib import Path
+    if override:
+        p = Path(override)
+        if not p.exists():
+            raise FileNotFoundError(f"Arquivo de títulos a manter ativos não encontrado: {p}")
+        return p
+    base = Path(__file__).resolve().parent.parent / "output" / "cursos_checkpoint"
+    slug = _slugify(carreira)
+    candidato = base / f"manter_ativos_{slug}_nivel_{nivel}.txt"
+    if candidato.exists():
+        return candidato
+    raise FileNotFoundError(
+        f"Arquivo não encontrado: {candidato}. Use --manter_arquivo para indicar manualmente."
+    )
+
+
+def desativar_atividades_prova_teorica(
+    course_id: int,
+    carreira: str,
+    nivel: int,
+    manter_arquivo: str = "",
+    limite: int = 0,
+    offset: int = 0,
+    headless: bool = False,
+) -> None:
+    """Desativa (status=INACTIVE) todas as atividades da seção 'Prova teórica' EXCETO
+    aquelas cujo título está em `manter_arquivo` (1 título por linha)."""
+    from pathlib import Path
+    load_dotenv()
+    email = os.getenv("EMAIL")
+    password = os.getenv("PASSWORD")
+    if not email or not password:
+        raise RuntimeError("Defina EMAIL e PASSWORD no .env (credenciais da Alura).")
+
+    arq = _resolve_manter_ativos_path(carreira, nivel, manter_arquivo)
+    titulos_manter = set()
+    for line in arq.read_text(encoding="utf-8").splitlines():
+        s = line.strip()
+        if s and not s.startswith("#"):
+            titulos_manter.add(s)
+    print(f"=== Desativar atividades da Prova teórica (curso {course_id}) ===")
+    print(f"Arquivo de títulos a manter ativos: {arq}")
+    print(f"Títulos a manter ativos: {len(titulos_manter)}")
+    for t in sorted(titulos_manter):
+        print(f"  • {t}")
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=headless)
+        context = browser.new_context()
+        page = context.new_page()
+
+        print("\n[1/3] Login...")
+        _login(page, email, password)
+        print("      ✓ OK")
+
+        print(f"\n[2/3] Listando tarefas da seção '{SECAO_PROVA_TEORICA}'...")
+        section_id = _section_id_por_nome(page, course_id, SECAO_PROVA_TEORICA)
+        print(f"      section_id = {section_id}")
+        tarefas = _listar_tarefas_da_secao(page, course_id, section_id)
+        print(f"      total de tarefas: {len(tarefas)}")
+
+        # Sanity check: títulos da lista que não foram encontrados na seção
+        titulos_encontrados = {t["titulo"] for t in tarefas}
+        nao_encontrados = titulos_manter - titulos_encontrados
+        if nao_encontrados:
+            print("\n⚠ Títulos da lista de 'manter ativos' NÃO encontrados na seção:")
+            for t in sorted(nao_encontrados):
+                print(f"  • {t!r}")
+            raise RuntimeError("Aborte: lista de manter contém títulos inexistentes — verifique e re-rode.")
+
+        a_desativar = [t for t in tarefas if t["titulo"] not in titulos_manter]
+        a_manter = [t for t in tarefas if t["titulo"] in titulos_manter]
+        print(f"\n      a manter ativas: {len(a_manter)}")
+        print(f"      a desativar:     {len(a_desativar)}")
+
+        if offset and offset > 0:
+            a_desativar = a_desativar[offset:]
+            print(f"      offset {offset} aplicado: restam {len(a_desativar)}")
+        if limite and limite > 0:
+            a_desativar = a_desativar[:limite]
+            print(f"      limite {limite} aplicado")
+
+        print(f"\n[3/3] Mudando status para INACTIVE em {len(a_desativar)} atividades...")
+        for i, t in enumerate(a_desativar, start=1):
+            print(f"\n  [{i}/{len(a_desativar)}] '{t['titulo']}' (ordem={t['ordem']}, edit={t['edit_url']})")
+            _definir_status_tarefa(page, t["edit_url"], "INACTIVE")
+            print(f"        ✓ INACTIVE")
+
+        print(f"\n✓ {len(a_desativar)} atividades desativadas. {len(a_manter)} mantidas como ACTIVE.")
+        browser.close()
+
+
 def marcar_prova_teorica(course_id: int, nome_secao: str = SECAO_PROVA_TEORICA, headless: bool = False) -> None:
     """Etapa avulsa: marca o checkbox 'É prova?' na seção indicada (default: 'Prova teórica').
     Use quando a seção já existe e só falta marcá-la como prova."""
@@ -1094,6 +1247,7 @@ def main() -> None:
             "criar_atividade_apresentacao",
             "criar_atividades_prova_teorica",
             "criar_atividades_prova_pratica",
+            "desativar_atividades_prova_teorica",
         ],
         required=True,
         help="Etapa a executar.",
@@ -1122,6 +1276,13 @@ def main() -> None:
         type=str,
         default="",
         help="Caminho explícito para o TXT da prova prática. Se omitido, monta a partir de --carreira/--nivel.",
+    )
+    parser.add_argument(
+        "--manter_arquivo",
+        type=str,
+        default="",
+        help="Caminho do TXT com títulos a manter ATIVOS (1 por linha). Usado em desativar_atividades_prova_teorica. "
+             "Se omitido, monta como output/cursos_checkpoint/manter_ativos_<slug>_nivel_<n>.txt.",
     )
     parser.add_argument(
         "--limite",
@@ -1175,6 +1336,18 @@ def main() -> None:
             carreira=args.carreira,
             nivel=args.nivel,
             prova_pratica_arquivo=args.prova_pratica_arquivo,
+            limite=args.limite,
+            offset=args.offset,
+            headless=args.headless,
+        )
+    elif args.etapa == "desativar_atividades_prova_teorica":
+        if not args.carreira and not args.manter_arquivo:
+            raise SystemExit("--carreira (ou --manter_arquivo) é obrigatório para esta etapa.")
+        desativar_atividades_prova_teorica(
+            args.curso_id,
+            carreira=args.carreira,
+            nivel=args.nivel,
+            manter_arquivo=args.manter_arquivo,
             limite=args.limite,
             offset=args.offset,
             headless=args.headless,
