@@ -24,7 +24,7 @@ import os
 import re
 import sys
 import time
-from typing import List
+from typing import List, Optional
 
 from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright, Page, TimeoutError as PWTimeoutError
@@ -532,29 +532,33 @@ def _parse_prova_teorica(txt: str) -> List[dict]:
         if not bloco or not re.search(r"^EXERCÍCIO\s+\d+", bloco, re.MULTILINE):
             continue
 
-        # Título
-        m_titulo = re.search(r"Título:\s*(.+)", bloco)
-        titulo = m_titulo.group(1).strip() if m_titulo else ""
+        # Título — tolera **Título:** (markdown bold)
+        m_titulo = re.search(r"(?:\*\*)?Título(?:\*\*)?:\s*(.+)", bloco)
+        titulo = m_titulo.group(1).strip().strip("*").strip() if m_titulo else ""
 
-        # Pergunta — tudo entre "Pergunta:" e a primeira "A)"
-        m_perg = re.search(r"Pergunta:\s*(.*?)\n\s*A\)", bloco, re.DOTALL)
-        pergunta = m_perg.group(1).strip() if m_perg else ""
+        # Pergunta — tudo entre "Pergunta:" e a primeira "A)" (tolera **)
+        m_perg = re.search(
+            r"(?:\*\*)?Pergunta(?:\*\*)?:\s*(.*?)\n\s*(?:\*\*)?A\)",
+            bloco, re.DOTALL,
+        )
+        pergunta = m_perg.group(1).strip().strip("*").strip() if m_perg else ""
 
-        # Alternativas A/B/C/D
+        # Alternativas A/B/C/D — tolera **A)**, **Justificativa:** etc.
         alternativas: List[dict] = []
         letras = ["A", "B", "C", "D"]
         for i, letra in enumerate(letras):
             # Match: <LETRA>) <texto até newline+Justificativa>\nJustificativa: <texto até próxima letra ou fim>
             proxima = letras[i + 1] if i + 1 < len(letras) else None
-            stop = rf"\n{proxima}\)" if proxima else r"\Z"
+            stop = rf"\n(?:\*\*)?{proxima}\)" if proxima else r"\Z"
             patt = (
-                rf"\n{letra}\)\s*(?P<texto>.*?)\n\s*Justificativa:\s*(?P<just>.*?)(?={stop})"
+                rf"\n(?:\*\*)?{letra}\)(?:\*\*)?\s*(?P<texto>.*?)\n\s*"
+                rf"(?:\*\*)?Justificativa(?:\*\*)?:\s*(?P<just>.*?)(?={stop})"
             )
             m = re.search(patt, bloco, re.DOTALL)
             if not m:
                 continue
-            texto = re.sub(r"\s+", " ", m.group("texto")).strip()
-            just = re.sub(r"\s+", " ", m.group("just")).strip()
+            texto = re.sub(r"\s+", " ", m.group("texto")).strip().strip("*").strip()
+            just = re.sub(r"\s+", " ", m.group("just")).strip().strip("*").strip()
             correta = bool(re.match(r"^Correta\b", just, re.IGNORECASE))
             alternativas.append({
                 "letra": letra,
@@ -777,11 +781,14 @@ def criar_atividades_prova_teorica(
     prova_teorica_arquivo: str = "",
     limite: int = 0,
     offset: int = 0,
+    indices: Optional[List[int]] = None,
     headless: bool = False,
 ) -> None:
     """Cria 1 atividade 'Única escolha' por EXERCÍCIO no arquivo TXT da prova teórica.
     `offset=N` pula os primeiros N (útil para retomada após criação parcial).
-    `limite=0` significa todos os restantes. `limite=N` processa apenas os N primeiros."""
+    `limite=0` significa todos os restantes. `limite=N` processa apenas os N primeiros.
+    `indices=[1,5,...]` (1-based) processa apenas os exercícios nessas posições — útil para
+    re-subir apenas exercícios que falharam em um run anterior. Aplicado antes de offset/limite."""
     from pathlib import Path
     load_dotenv()
     email = os.getenv("EMAIL")
@@ -804,6 +811,13 @@ def criar_atividades_prova_teorica(
         if ex["n_corretas"] != 1:
             print(f"  ⚠ EXERCÍCIO {i} ('{ex['titulo']}'): {ex['n_corretas']} corretas (esperado 1)")
 
+    if indices:
+        total = len(exercicios)
+        invalidos = [i for i in indices if i < 1 or i > total]
+        if invalidos:
+            raise ValueError(f"--indices fora do intervalo [1..{total}]: {invalidos}")
+        exercicios = [exercicios[i - 1] for i in indices]
+        print(f"Indices aplicados: {indices} — processando {len(exercicios)} exercício(s)")
     if offset and offset > 0:
         exercicios = exercicios[offset:]
         print(f"Offset aplicado: pulando os primeiros {offset}, restam {len(exercicios)}")
@@ -1297,6 +1311,13 @@ def main() -> None:
         help="Pula os primeiros N exercícios (útil para retomar após criação parcial).",
     )
     parser.add_argument(
+        "--indices",
+        type=str,
+        default="",
+        help="Lista CSV 1-based de exercícios a processar (ex.: '1,5,7'). Útil para re-subir apenas "
+             "exercícios que falharam em um run anterior. Aplicado antes de --offset/--limite.",
+    )
+    parser.add_argument(
         "--secoes",
         type=str,
         default="",
@@ -1319,6 +1340,10 @@ def main() -> None:
     elif args.etapa == "criar_atividades_prova_teorica":
         if not args.carreira and not args.prova_teorica_arquivo:
             raise SystemExit("--carreira (ou --prova_teorica_arquivo) é obrigatório para esta etapa.")
+        indices_list = (
+            [int(x.strip()) for x in args.indices.split(",") if x.strip()]
+            if args.indices else None
+        )
         criar_atividades_prova_teorica(
             args.curso_id,
             carreira=args.carreira,
@@ -1326,6 +1351,7 @@ def main() -> None:
             prova_teorica_arquivo=args.prova_teorica_arquivo,
             limite=args.limite,
             offset=args.offset,
+            indices=indices_list,
             headless=args.headless,
         )
     elif args.etapa == "criar_atividades_prova_pratica":

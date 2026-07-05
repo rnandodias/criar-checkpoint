@@ -4,14 +4,14 @@ Contexto para assistentes de código (Claude Code / agents) que operem neste rep
 
 ## O que é este projeto
 
-Pipeline para **gerar atividades de Checkpoint** (prova teórica e prova prática) dos níveis de carreira da Alura, de ponta a ponta. Começa no scraping das transcrições dos cursos, gera as provas com LLM e publica no admin da plataforma via automação.
+Pipeline para **gerar atividades de Checkpoint** (prova teórica e prova prática) dos níveis de carreira da Alura, de ponta a ponta. Começa coletando as transcrições dos cursos via **API oficial de cursos da Alura**, gera as provas com LLM e publica no admin da plataforma via automação Playwright.
 
 Este projeto foi extraído/isolado a partir de dois projetos maiores do usuário (`Tarefas` e `scraping_formações`), trazendo **somente** o que diz respeito à geração das provas de checkpoint. Os dois projetos originais permanecem intactos como referência.
 
 ## Pipeline (5 etapas)
 
 ```text
-1) obter_transcricoes_cursos.py      →  trilha/<carreira>_nivel_<n>.json
+1) obter_transcricoes_cursos.py      →  trilha/<carreira>_nivel_<n>.json         (API Alura de cursos)
 2) checkpoint_criar_resumos_cursos.py →  output/checkpoints/resumos_<carreira>_nivel_<n>.json
 3) gerar_prova_teorica_do_zero.py    →  output/cursos_checkpoint/prova_teorica_<slug>_nivel_<n>.txt
 4) gerar_prova_pratica_do_zero.py    →  output/cursos_checkpoint/prova_pratica_<slug>_nivel_<n>.txt
@@ -25,8 +25,12 @@ Cada script consome a saída do anterior. Os resumos são a **fonte única de ve
 - **Python 3.10+**
 - `openai==1.102.0` + `anthropic==0.97.0` (provas + resumos — provider escolhido pelo prefixo do MODEL: `gpt-*`/`o*-*` → OpenAI, `claude-*` → Anthropic)
 - `python-dotenv`
-- `playwright==1.51.0` (scraping + upload no admin) · `beautifulsoup4` · `tqdm` · `requests`
-- Credenciais no `.env`: `OPENAI_CREDENTIALS`, `ANTHROPIC_API_KEY` (opcional, só se usar Claude), `EMAIL`, `PASSWORD`
+- `requests` + `tqdm` (etapa 1 — chamadas à API de cursos da Alura)
+- `playwright==1.51.0` (etapa 5 — upload no admin, EasyMDE/CodeMirror)
+- Credenciais no `.env`:
+  - `ALURA_API_TOKEN` → **etapa 1** (API oficial de cursos)
+  - `OPENAI_CREDENTIALS` ou `ANTHROPIC_API_KEY` → etapas 2, 3, 4 (LLMs)
+  - `EMAIL`, `PASSWORD` → **etapa 5** apenas (login Playwright no admin)
 
 ## Convenções importantes (ler antes de editar)
 
@@ -42,9 +46,9 @@ Cada script consome a saída do anterior. Os resumos são a **fonte única de ve
 
 ```text
 scripts/
-├── _scraping_utils.py                     # limpar_texto (helper interno)
+├── _scraping_utils.py                     # legado (limpar_texto) — não importado por nenhum script ativo
 ├── carreiras_niveis.py                    # mapa carreira/nível → IDs dos cursos
-├── obter_transcricoes_cursos.py           # 1) Playwright + Alura
+├── obter_transcricoes_cursos.py           # 1) API oficial de cursos da Alura
 ├── checkpoint_criar_resumos_cursos.py     # 2) resumos via LLM (OpenAI ou Anthropic)
 ├── gerar_prova_teorica_do_zero.py         # 3) múltipla escolha (4 fases)
 ├── gerar_prova_pratica_do_zero.py         # 4) Aula 3 (TXT estruturado)
@@ -82,11 +86,15 @@ python scripts/upload_checkpoint_alura.py --curso_id 5256 --etapa criar_atividad
 ## Diretrizes para quem for editar o código
 
 - Adicionar uma nova carreira/nível: editar o dicionário em `scripts/carreiras_niveis.py`. Não duplicar IDs em múltiplos lugares.
-- Trocar modelo: as constantes ficam no topo de cada script (`MODEL`, `MODEL_IDEAS`, `MODEL_FORMAT`, `MODEL_RANK`, `MODEL_GEN`). O **provider é detectado pelo prefixo**: `gpt-*` ou `o1/o3/o4-*` → OpenAI, `claude-*` → Anthropic. Modelos sem suporte a `temperature` customizada (gpt-5, o-series, claude-opus-4-7+) são tratados automaticamente em `_model_supports_temperature`.
-- **Cache + Batch Anthropic:** quando o MODEL é Anthropic e a etapa tem ≥2 chamadas (etapa 2, etapa 3 fases 1/2), o script usa Message Batches API (50% off) automaticamente. Cache (90% off em hits) é sempre ativo nas chamadas Anthropic — funciona apenas se os blocks estáticos atingirem o mínimo de 1024 tokens (Sonnet/Opus) ou 2048 (Haiku). Flag `--no-batch` força sync (apenas para debug).
+- **Modelo padrão atual:** Opus 4-6 em TODAS as etapas LLM (`MODEL`, `MODEL_IDEAS`, `MODEL_FORMAT`, `MODEL_GEN`, `MODEL_RANK`). Preferência do usuário registrada em memória — usar outro modelo só se for pedido explicitamente. As constantes ficam no topo de cada script. **Provider detectado pelo prefixo**: `gpt-*` ou `o1/o3/o4-*` → OpenAI, `claude-*` → Anthropic. Modelos sem suporte a `temperature` customizada (gpt-5, o-series, claude-opus-4-7+) são tratados automaticamente em `_model_supports_temperature`.
+- **Cache + Batch Anthropic:**
+  - **Etapa 2** (resumos) e **etapa 3** (teórica, fases 1 e 2): Message Batches API (50% off) **automática** quando MODEL é Anthropic e a etapa tem ≥2 chamadas. Cache (90% off em hits) sempre ativo — funciona se os blocks estáticos atingirem 1024 tokens (Sonnet/Opus) ou 2048 (Haiku). Flag `--no-batch` força sync (debug).
+  - **Etapa 4** (prática): 1 chamada única. Batch é **opt-in** via `--batch` (útil pra economizar 50% em runs não urgentes; latência sobe pra 5-30 min).
+  - **Etapa 3 fases 3 e 4** continuam sync (loop iterativo + 1 chamada de ranking); refactor pra batch tem ROI baixo.
 - Mexer nos **prompts** de geração de prova é uma mudança de alto impacto — valide com o usuário antes. Os prompts estão em funções `system_prompt_*` / `user_prompt_*` e foram iterados com base em incidentes reais (alternativas muito longas, questões fora de escopo, etc.).
-- O parser de questões teóricas (`_parse_exercise_ideas_verbatim`) tolera markdown bold/itálico (Sonnet 4.6 retorna `**Exercício 1 - X**`). Se mudar o template de saída, validar.
+- **Parser da teórica** (`_parse_exercise_ideas_verbatim`) tolera: markdown bold/itálico nos marcadores, cabeçalhos markdown (`##`), e sinônimos comuns (`Enunciado`/`Pergunta`/`Questão` = `Texto da questão`; `Resolução`/`Solução`/`Resposta correta` = `Resposta`; `Conceito`/`Tópico` = `Conceito abordado`). O prompt em `_ask_exercise_ideas` impõe o formato estrito; o parser é rede de segurança.
 - O `upload_checkpoint_alura.py` usa Playwright + JS evaluate para EasyMDE/CodeMirror (textareas escondidos no admin). Seletores chave: `select#chooseTask` (tipo de atividade, hierárquico), `input.add-alternative[data-type='emptySingleAlternative']`, `textarea[name="alternatives[N].text"]`, `textarea[name="alternatives[N].opinion"]`, `input[type="radio"][name="alternatives[N].correct"]`.
+- **Flag `--indices` no uploader** (`criar_atividades_prova_teorica`): lista CSV 1-based (ex.: `--indices 1,5`) para re-subir apenas exercícios específicos após um run parcial. Aplicado antes de `--offset`/`--limite`.
 - Os scripts não são uma biblioteca — são CLIs. Não introduzir camadas de abstração "for future use".
 
 ## Onde buscar contexto adicional

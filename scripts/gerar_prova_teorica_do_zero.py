@@ -49,13 +49,13 @@ if sys.platform == "win32":
 # Configuração de modelos
 # =========================
 # Geração crítica (ideias + transformação em múltipla escolha): "cavalo de carga"
-MODEL_IDEAS = "claude-sonnet-4-6"
-MODEL_FORMAT = "claude-sonnet-4-6"
+MODEL_IDEAS = "claude-opus-4-6"
+MODEL_FORMAT = "claude-opus-4-6"
 TEMPERATURE_IDEAS = 0.0
 TEMPERATURE_FORMAT = 0.0
 
 # Ranqueamento (apenas dificuldade — não vale gastar): modelo barato
-MODEL_RANK = "claude-haiku-4-5-20251001"
+MODEL_RANK = "claude-opus-4-6"
 TEMPERATURE_RANK = 0.0
 
 # Alternativas:
@@ -105,14 +105,27 @@ EXEMPLOS DE ENUNCIADO (mantenha esse tamanho — entre 120 e 180 palavras):
 
 - A Hermex Log, empresa de logística, te contratou para apoiar a equipe de QA com containers Docker efêmeros. Ao rodar `docker run ubuntu`, o container inicia e logo fica em estado "exited", impedindo análise. A equipe precisa entender o motivo desse comportamento. Por que o container saiu logo após a inicialização?
 
-Formato de saída:
+FORMATO DE SAÍDA (OBRIGATÓRIO — não altere os marcadores):
+
+Cada exercício deve começar com "Exercício N - " seguido do título e usar EXATAMENTE estes três marcadores (nesta ordem, sem markdown, sem numeração, sem sinônimos):
+
 Exercício 1 - Título curto em português corrido
 
 Texto da questão:
+<texto do enunciado + pergunta norteadora>
 
 Conceito abordado:
+<conceito principal>
 
 Resposta:
+<justificativa concisa>
+
+Proibições estritas:
+- NÃO use negrito, itálico, cabeçalhos markdown ou emojis nos marcadores (ex.: nada de **Texto da questão:** ou ## Resposta).
+- NÃO troque "Texto da questão" por "Enunciado", "Pergunta", "Questão".
+- NÃO troque "Resposta" por "Resolução", "Resposta correta", "Solução".
+- NÃO troque "Conceito abordado" por "Conceito", "Tópico".
+- NÃO adicione seções extras entre os marcadores (ex.: nada de "Nível de dificuldade:", "Justificativa:", "Alternativas:").
 """
 
 
@@ -747,18 +760,32 @@ def _parse_exercise_ideas_verbatim(raw_text: str) -> List[ExerciseItem]:
     Texto da questão:
     <pergunta...>
 
-    Conceito abordado:
+    Conceito abordado:  (opcional)
     <...>
 
     Resposta:
     <resposta...>
 
-    Tolera markdown bold (**...**) que alguns modelos (ex.: Sonnet 4.6) usam.
+    Tolerâncias:
+    - Markdown bold (**...**) e itálico (*...*) que alguns modelos usam nos marcadores.
+    - Cabeçalhos markdown (##, ###) antes dos marcadores.
+    - Sinônimos comuns nos rótulos (rede de segurança para diferentes modelos):
+        * "Texto da questão" → também aceita: Enunciado, Pergunta, Questão
+        * "Conceito abordado" → também aceita: Conceito, Tópico, Tópico abordado
+        * "Resposta" → também aceita: Resolução, Resposta correta, Solução
     """
+    # Regex parciais dos rótulos (sem os dois pontos — adicionados no consumo).
+    RE_PERGUNTA = r"(?:Texto\s+da\s+quest[ãa]o|Enunciado|Pergunta|Quest[ãa]o)"
+    RE_CONCEITO = r"(?:Conceito(?:\s+abordado)?|T[óo]pico(?:\s+abordado)?)"
+    RE_RESPOSTA = r"(?:Resposta(?:\s+correta)?|Resolu[çc][ãa]o|Solu[çc][ãa]o)"
+
     txt = raw_text.replace("\r\n", "\n")
-    # Remove markdown bold (**xxx**) e itálico (*xxx*) que cercam marcadores
+    # Remove markdown bold (**xxx**) e itálico (*xxx*) que cercam marcadores.
     txt = re.sub(r"\*{1,3}([^*\n]+?)\*{1,3}", r"\1", txt)
-    blocks = re.split(r"\n?Exerc[íi]cio\s*\d+\s*[-–—:]\s*", txt, flags=re.IGNORECASE)
+    # Remove cabeçalhos markdown (##, ###) no início de linhas — deixa só o conteúdo.
+    txt = re.sub(r"(?m)^\s*#{1,6}\s+", "", txt)
+
+    blocks = re.split(r"\n?(?:#{1,6}\s+)?Exerc[íi]cio\s*\d+\s*[-–—:]\s*", txt, flags=re.IGNORECASE)
     items: List[ExerciseItem] = []
     for blk in blocks:
         blk = blk.strip()
@@ -767,17 +794,17 @@ def _parse_exercise_ideas_verbatim(raw_text: str) -> List[ExerciseItem]:
         title_end = blk.find("\n")
         if title_end == -1:
             continue
-        titulo = blk[:title_end].strip()
+        titulo = blk[:title_end].strip().strip("*").strip()
         rest = blk[title_end+1:].strip()
 
         m = re.search(
-            r"Texto da questão:\s*(?P<pergunta>.*?)\n+Conceito abordado:\s*(?P<conceito>.*?)\n+Resposta:\s*(?P<resposta>.*)$",
+            rf"{RE_PERGUNTA}\s*:\s*(?P<pergunta>.*?)\n+{RE_CONCEITO}\s*:\s*(?P<conceito>.*?)\n+{RE_RESPOSTA}\s*:\s*(?P<resposta>.*)$",
             rest,
             flags=re.IGNORECASE | re.DOTALL,
         )
         if not m:
             m2 = re.search(
-                r"Texto da questão:\s*(?P<pergunta>.*?)\n+Resposta:\s*(?P<resposta>.*)$",
+                rf"{RE_PERGUNTA}\s*:\s*(?P<pergunta>.*?)\n+{RE_RESPOSTA}\s*:\s*(?P<resposta>.*)$",
                 rest,
                 flags=re.IGNORECASE | re.DOTALL,
             )

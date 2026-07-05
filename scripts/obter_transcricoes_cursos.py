@@ -1,19 +1,16 @@
 """
-Obtém as transcrições dos vídeos dos cursos da Alura e grava o JSON
-diretamente em `trilha/<nome_saida>.json`, no formato esperado pelo script
+Obtém as transcrições dos cursos da Alura via API oficial e grava o JSON
+em `trilha/<nome_saida>.json`, no formato esperado pelo script
 `checkpoint_criar_resumos_cursos.py`.
 
-Adaptado do método `ScrapingAlura.get_course_transcription` do projeto
-SCRAPING_FORMAÇÕES, mantendo apenas o estritamente necessário para o fluxo
-de checkpoints.
+Substitui a versão anterior baseada em scraping Playwright (mais lenta, dependia
+de EMAIL/PASSWORD e sofria timeouts em páginas com layout novo).
 
 Pré-requisitos:
   pip install -r requirements.txt
-  playwright install
 
 Variáveis de ambiente (.env):
-  EMAIL=seu_email_alura
-  PASSWORD=sua_senha_alura
+  ALURA_API_TOKEN=<token da API de cursos>
 
 Exemplos:
   # Usando a carreira/nível registrados em `carreiras_niveis.py`:
@@ -35,6 +32,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from typing import List, Optional
 
@@ -43,15 +41,13 @@ if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
+import requests
 from dotenv import load_dotenv
-from bs4 import BeautifulSoup
 from tqdm import tqdm
-from playwright.sync_api import sync_playwright, TimeoutError as PWTimeoutError
 
 # Imports locais
 _SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_SCRIPT_DIR))
-from _scraping_utils import limpar_texto  # noqa: E402
 from carreiras_niveis import (  # noqa: E402
     CARREIRAS_NIVEIS,
     listar_carreiras,
@@ -61,86 +57,62 @@ from carreiras_niveis import (  # noqa: E402
 
 OUTPUT_DIR = _SCRIPT_DIR.parent / "trilha"
 
+API_BASE_URL = "https://cursos.alura.com.br/api/course"
+API_TIMEOUT = 60  # segundos por request
+# Rate limit da API: 10 req/s. Usamos 150ms mínimo entre chamadas (~6.6 req/s) por segurança.
+MIN_INTERVAL_SEC = 0.15
 
-def _login(page, email: str, password: str) -> None:
-    page.goto("https://cursos.alura.com.br/loginForm")
-    page.fill("#login-email", email)
-    page.fill("#password", password)
-    page.click("button:has-text('Entrar')")
-    try:
-        # Espera sair da página de login — URL muda para o dashboard/algum path autenticado.
-        page.wait_for_url(
-            lambda url: "loginForm" not in url and "login" not in url.rstrip("/").split("/")[-1],
-            timeout=30_000,
-        )
-        page.wait_for_load_state("networkidle", timeout=15_000)
-    except PWTimeoutError as e:
+# Atividades cujo `text` compõe a "transcrição" do curso.
+# VIDEO           → transcrição das aulas em vídeo (base histórica do scraping).
+# HQ_EXPLANATION  → textos curados densos (frameworks, tabelas comparativas).
+# TEXT_CONTENT    → "Para saber mais", "Faça como eu fiz", "O que aprendemos?".
+KINDS_APROVEITADOS = {"VIDEO", "HQ_EXPLANATION", "TEXT_CONTENT"}
+
+
+def _get_token() -> str:
+    load_dotenv()
+    token = os.getenv("ALURA_API_TOKEN")
+    if not token:
         raise RuntimeError(
-            "Login na Alura falhou (URL continua em /loginForm após 30s). "
-            "Verifique EMAIL/PASSWORD no .env, presença de captcha ou 2FA, "
-            "ou use --headful para inspecionar visualmente."
-        ) from e
+            "Defina ALURA_API_TOKEN no .env para acessar a API de cursos da Alura."
+        )
+    return token
 
 
-def _extrair_transcricoes_do_curso(page, course_id: int) -> Optional[dict]:
-    page.goto(f"https://cursos.alura.com.br/admin/courses/v2/{course_id}")
-    href = page.get_attribute("text=Ver curso", "href")
-    if not href:
-        print(f"[AVISO] Não encontrei o botão 'Ver curso' para o ID {course_id}. Pulando...")
-        return None
-    link = f"https://cursos.alura.com.br{href}"
+def _fetch_course(course_id: int, token: str) -> dict:
+    """Busca o JSON de um curso na API. Levanta HTTPError em 4xx/5xx."""
+    url = f"{API_BASE_URL}/{course_id}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+    }
+    resp = requests.get(url, headers=headers, timeout=API_TIMEOUT)
+    resp.raise_for_status()
+    return resp.json()
 
-    page.goto(link, timeout=60_000, wait_until="domcontentloaded")
-    try:
-        page.wait_for_selector(".courseSectionList", timeout=60_000)
-    except PWTimeoutError:
-        print(f"[AVISO] Timeout em {link}. Pulando curso {course_id}...")
-        return None
 
-    soup = BeautifulSoup(page.content(), "html.parser")
-    nome_tag = soup.find("h1")
-    nome = nome_tag.strong.get_text() if (nome_tag and nome_tag.strong) else f"Curso {course_id}"
+def _extrair_curso(data: dict, course_id: int) -> dict:
+    """Converte o payload da API no schema consumido pelo restante do pipeline:
+    {id, nome, link, transcricao: [str, ...]}
 
-    # Coleta links dos vídeos percorrendo as seções
-    videos: List[str] = []
-    for item in soup.find_all("li", class_="courseSection-listItem"):
-        a_sec = item.find("a", class_="courseSectionList-section")
-        if not a_sec or not a_sec.get("href"):
-            continue
-        aula = f"https://cursos.alura.com.br{a_sec['href']}"
-        page.goto(aula, timeout=60_000, wait_until="domcontentloaded")
-        try:
-            page.wait_for_selector(".task-menu-sections-select", timeout=60_000)
-        except PWTimeoutError:
-            print(f"[AVISO] Timeout em {aula}. Pulando seção...")
-            continue
-        soup_section = BeautifulSoup(page.content(), "html.parser")
-        for video in soup_section.find_all(
-            "a", class_="task-menu-nav-item-link task-menu-nav-item-link-VIDEO"
-        ):
-            if video.get("href"):
-                videos.append(f"https://cursos.alura.com.br{video['href']}")
+    Cada item de `transcricao` é o texto de UMA atividade prefixado por
+    `"Atividade N - <titulo>\\n"`, para preservar a marcação de fronteira entre
+    unidades de conteúdo (padrão herdado do scraping antigo).
+    """
+    nome = data.get("nome") or f"Curso {course_id}"
+    slug = data.get("slug")
+    link = f"https://cursos.alura.com.br/course/{slug}" if slug else ""
 
-    # Coleta transcrições de cada vídeo
-    transcricoes: List[Optional[str]] = []
-    for index, video in enumerate(videos):
-        page.goto(video, timeout=60_000, wait_until="domcontentloaded")
-        try:
-            page.wait_for_selector("#transcription", timeout=60_000)
-        except PWTimeoutError:
-            print(f"[AVISO] Timeout em {video}. Pulando vídeo...")
-            transcricoes.append(None)
-            continue
-        soup_video = BeautifulSoup(page.content(), "html.parser")
-        title_tag = soup_video.find("h1", class_="task-body-header-title")
-        title = title_tag.span.get_text() if (title_tag and title_tag.span) else f"Vídeo {index + 1}"
-        section = soup_video.find("section", id="transcription")
-        if not section:
-            transcricoes.append(None)
-            continue
-        transcription = section.get_text()
-        transcription = transcription.replace("Transcrição", f"Vídeo {index + 1} -{title}")
-        transcricoes.append(limpar_texto(transcription))
+    transcricoes: List[str] = []
+    for aula in data.get("aulas", []) or []:
+        for atv in aula.get("atividades", []) or []:
+            if atv.get("kind") not in KINDS_APROVEITADOS:
+                continue
+            text = atv.get("text")
+            if not text:
+                continue
+            title = atv.get("title") or f"Atividade {len(transcricoes) + 1}"
+            transcricoes.append(f"Atividade {len(transcricoes) + 1} - {title}\n{text}")
 
     return {
         "id": course_id,
@@ -150,28 +122,40 @@ def _extrair_transcricoes_do_curso(page, course_id: int) -> Optional[dict]:
     }
 
 
-def obter_transcricoes(courses_id: List[int], nome_saida: str, headless: bool = True) -> Path:
-    load_dotenv()
-    email = os.getenv("EMAIL")
-    password = os.getenv("PASSWORD")
-    if not email or not password:
-        raise RuntimeError("Defina EMAIL e PASSWORD no .env (credenciais da Alura).")
+def obter_transcricoes(courses_id: List[int], nome_saida: str) -> Path:
+    token = _get_token()
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     out_path = OUTPUT_DIR / f"{nome_saida}.json"
 
     cursos: List[dict] = []
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=headless)
-        page = browser.new_page()
-        _login(page, email, password)
+    last_call = 0.0
+    for course_id in tqdm(courses_id, desc="Cursos"):
+        # Throttle simples para respeitar o rate limit de 10 req/s.
+        elapsed = time.monotonic() - last_call
+        if elapsed < MIN_INTERVAL_SEC:
+            time.sleep(MIN_INTERVAL_SEC - elapsed)
+        last_call = time.monotonic()
 
-        for course_id in tqdm(courses_id, desc="Cursos"):
-            curso = _extrair_transcricoes_do_curso(page, course_id)
-            if curso is not None:
-                cursos.append(curso)
+        try:
+            data = _fetch_course(course_id, token)
+        except requests.HTTPError as e:
+            status = e.response.status_code if e.response is not None else "?"
+            if status in (401, 403):
+                raise RuntimeError(
+                    f"Token da API recusado (HTTP {status}). Revise ALURA_API_TOKEN no .env."
+                ) from e
+            print(f"[AVISO] Curso {course_id} falhou (HTTP {status}). Pulando...")
+            continue
+        except requests.RequestException as e:
+            print(f"[AVISO] Curso {course_id} erro de conexão: {e}. Pulando...")
+            continue
 
-        browser.close()
+        curso = _extrair_curso(data, course_id)
+        if not curso["transcricao"]:
+            print(f"[AVISO] Curso {course_id} ('{curso['nome']}') sem atividades aproveitáveis. Pulando...")
+            continue
+        cursos.append(curso)
 
     out_path.write_text(json.dumps(cursos, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"[OK] Transcrições salvas em: {out_path}")
@@ -184,13 +168,12 @@ def _parse_ids(raw: str) -> List[int]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Coleta transcrições dos cursos da Alura e grava em trilha/<nome>.json.",
+        description="Coleta transcrições dos cursos da Alura (via API) e grava em trilha/<nome>.json.",
     )
     parser.add_argument("--carreira", type=str, help="Chave de carreira registrada em carreiras_niveis.py")
     parser.add_argument("--nivel", type=int, choices=[1, 2, 3], help="Nível da carreira (1, 2 ou 3).")
     parser.add_argument("--ids", type=str, help="Lista de IDs de cursos separados por vírgula.")
     parser.add_argument("--nome_saida", type=str, help="Nome do arquivo de saída (sem .json).")
-    parser.add_argument("--headful", action="store_true", help="Abrir navegador visível (debug).")
     parser.add_argument("--listar", action="store_true", help="Listar carreiras e níveis conhecidos e sair.")
     args = parser.parse_args()
 
@@ -211,7 +194,7 @@ def main() -> None:
     else:
         parser.error("Use --carreira + --nivel OU --ids + --nome_saida. Use --listar para ver as opções.")
 
-    obter_transcricoes(ids, nome_saida, headless=not args.headful)
+    obter_transcricoes(ids, nome_saida)
 
 
 if __name__ == "__main__":

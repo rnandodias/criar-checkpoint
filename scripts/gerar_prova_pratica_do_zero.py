@@ -59,7 +59,7 @@ if sys.platform == "win32":
 # Config de modelos
 # =========================
 # Geração da prova prática: top de linha (segue restrições rigorosas de escopo)
-MODEL_GEN = "claude-opus-4-7"
+MODEL_GEN = "claude-opus-4-6"
 TEMP = 0.0
 
 # Alternativas:
@@ -377,18 +377,56 @@ def _accumulate_usage(usage: Dict[str, int]) -> None:
         USAGE_TOTALS[k] += int(usage.get(k, 0) or 0)
 
 
+_USE_BATCH = False  # ativado via flag CLI --batch (apenas Anthropic)
+
+
+def _anthropic_request_params(model: str, system: str, user: str) -> Dict[str, Any]:
+    params: Dict[str, Any] = {
+        "model": model,
+        "max_tokens": 16384,
+        "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+        "messages": [{"role": "user", "content": user}],
+    }
+    if _model_supports_temperature(model):
+        params["temperature"] = TEMP
+    return params
+
+
+def _anthropic_batch_single(model: str, system: str, user: str, poll_interval: float = 30.0) -> str:
+    """Submete 1 request via Message Batches API (50% off) e bloqueia até concluir."""
+    client = _get_anthropic_client()
+    params = _anthropic_request_params(model, system, user)
+    print(f"[Batch] Submetendo 1 request para {model}...")
+    batch = client.messages.batches.create(requests=[{"custom_id": "pratica", "params": params}])
+    print(f"[Batch] ID: {batch.id} | aguardando processamento (poll a cada {poll_interval:.0f}s)...")
+    while batch.processing_status != "ended":
+        time.sleep(poll_interval)
+        batch = client.messages.batches.retrieve(batch.id)
+        rc = batch.request_counts
+        print(f"[Batch {batch.id[:16]}] proc={rc.processing} ok={rc.succeeded} err={rc.errored} cancel={rc.canceled} exp={rc.expired}")
+    print("[Batch] Concluído. Lendo resultado...")
+    for entry in client.messages.batches.results(batch.id):
+        if entry.result.type != "succeeded":
+            raise RuntimeError(f"Batch falhou: {entry.result.type}")
+        msg = entry.result.message
+        text = "".join(b.text for b in msg.content if hasattr(b, "text"))
+        _accumulate_usage({
+            "cache_creation_input_tokens": getattr(msg.usage, "cache_creation_input_tokens", 0) or 0,
+            "cache_read_input_tokens": getattr(msg.usage, "cache_read_input_tokens", 0) or 0,
+            "input_tokens": msg.usage.input_tokens,
+            "output_tokens": msg.usage.output_tokens,
+        })
+        return text
+    raise RuntimeError("Batch concluiu sem resultados.")
+
+
 def _chat(client: Any, model: str, system: str, user: str) -> str:
     """Roteia OpenAI vs Anthropic. Para Anthropic usa prompt caching no system prompt
-    (que é grande e não muda entre runs)."""
+    (que é grande e não muda entre runs). Quando _USE_BATCH=True, usa Message Batches API (50% off)."""
     if _provider_for(model) == "anthropic":
-        kwargs_a: Dict[str, Any] = {
-            "model": model,
-            "max_tokens": 16384,
-            "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
-            "messages": [{"role": "user", "content": user}],
-        }
-        if _model_supports_temperature(model):
-            kwargs_a["temperature"] = TEMP
+        if _USE_BATCH:
+            return _anthropic_batch_single(model, system, user)
+        kwargs_a = _anthropic_request_params(model, system, user)
         resp = _get_anthropic_client().messages.create(**kwargs_a)
         text = "".join(b.text for b in resp.content if hasattr(b, "text"))
         _accumulate_usage({
@@ -760,8 +798,16 @@ def main():
     parser.add_argument("--domains_arquivo", type=str, default="")
     parser.add_argument("--ferramentas_arquivo", type=str, default="")
     parser.add_argument("--modo_dados", type=str, choices=["auto","com","sem"], default="auto", help="auto (padrão): detecta pelo contexto; com: força datasets; sem: nunca gera datasets.")
+    parser.add_argument("--batch", action="store_true", help="Anthropic apenas: usa Message Batches API (50%% off, latência 5-30min vs ~3min sync).")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
+
+    if args.batch:
+        if _provider_for(MODEL_GEN) != "anthropic":
+            raise RuntimeError("--batch só funciona com modelos Anthropic (claude-*).")
+        global _USE_BATCH
+        _USE_BATCH = True
+        print("[Config] Modo batch ativado (50% off, latência maior).")
 
     # Domínios
     if args.domains_arquivo:
