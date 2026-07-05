@@ -1,105 +1,246 @@
 # criar-checkpoint
 
-Projeto isolado para **gerar atividades de Checkpoint** (prova teórica e prova prática) dos níveis de carreira da Alura, de ponta a ponta:
+Pipeline para **gerar atividades de Checkpoint** (prova teórica + prova prática) dos níveis de carreira da Alura, de ponta a ponta:
 
-1. **Coleta** as transcrições dos vídeos dos cursos diretamente da plataforma (scraping).
-2. **Resume** cada curso em conteúdos testáveis.
-3. **Gera** a prova teórica (múltipla escolha) e a prova prática (Aula 3 do Checkpoint).
+1. **Coleta** as transcrições dos cursos via **API oficial de cursos da Alura**.
+2. **Resume** cada curso em conteúdos testáveis (fonte única de verdade das provas).
+3. **Gera** a prova teórica (20 questões de múltipla escolha) e a prova prática (Aula 3 do Checkpoint).
 4. **Publica** as atividades direto no admin da Alura via automação Playwright.
 
-Todo o fluxo acontece neste único projeto.
+Cada etapa é um script CLI independente, orquestrado sequencialmente. O pipeline foi desenhado para rodar **em conjunto com um assistente de IA** (o [Claude Code](https://docs.anthropic.com/en/docs/claude-code)), que atua como **copiloto de execução**: dispara comandos, monitora o progresso, alerta problemas estruturais e pausa para consultar quando aparece uma decisão relevante (custo, escopo, correção de rumo).
+
+Também funciona 100% na mão, via CLI, para quem preferir.
 
 ---
 
-## Fluxo completo (ponta a ponta)
+## Arquitetura em 30 segundos
 
 ```text
-┌──────────────────────────┐  JSON transcrições  ┌────────────────────┐  JSON resumo  ┌────────────────────────┐  TXT prova  ┌─────────────────────────┐
-│ 1) obter_transcricoes    │ ───────────────────▶│ 2) checkpoint_criar│ ────────────▶ │ 3) gerar_prova_teorica │ ──────────▶ │ 5) upload_checkpoint    │
-│    Playwright + Alura    │  trilha/<nome>.json │    resumos (LLM)   │  output/...   │ 4) gerar_prova_pratica │             │    Playwright + admin   │
-└──────────────────────────┘                     └────────────────────┘               └────────────────────────┘             └─────────────────────────┘
+┌────────────────────────────┐  JSON transcrições  ┌──────────────────────┐  JSON resumo   ┌─────────────────────────┐  TXT prova  ┌────────────────────────┐
+│ 1) obter_transcricoes      │ ──────────────────▶ │ 2) checkpoint_criar  │ ─────────────▶ │ 3) gerar_prova_teorica  │ ─────────▶ │ 5) upload_checkpoint   │
+│    API Alura de cursos     │  trilha/<nome>.json │    resumos (LLM)     │  output/...    │ 4) gerar_prova_pratica  │             │    Playwright + admin  │
+└────────────────────────────┘                     └──────────────────────┘                └─────────────────────────┘             └────────────────────────┘
 ```
 
-A etapa 2 aceita modelos OpenAI (`gpt-*`, `o1/o3/o4-*`) **ou** Anthropic (`claude-*`) — o provider é escolhido pelo prefixo do MODEL no topo de cada script. Para Anthropic, a etapa 2 e 3 usam Message Batches API automaticamente (50% off).
+- Etapa 1 é chamada HTTP (rápida, ~5s para 8 cursos).
+- Etapas 2, 3 e 4 usam LLM Anthropic (**Claude Opus 4-6** em tudo, por padrão).
+- Etapa 5 usa Playwright (janela visível por padrão) para automatizar o admin da Alura.
+- Etapas 2 e 3 (fases 1 e 2) usam **Message Batches API** automaticamente quando ≥2 chamadas (50% off).
+- Etapa 4 tem batch **opt-in** via `--batch`.
 
-### 1) Coletar as transcrições dos cursos
+---
+
+## Pré-requisitos
+
+- **Python 3.10+**
+- **Credenciais no `.env`** (copie de `.env.example`):
+  - `ALURA_API_TOKEN` → etapa 1 (API oficial de cursos)
+  - `ANTHROPIC_API_KEY` → etapas 2, 3, 4 (LLM)
+  - `EMAIL` e `PASSWORD` → etapa 5 (login no admin via Playwright)
+  - `OPENAI_CREDENTIALS` → opcional; só se quiser trocar de provider LLM
+- **Curso de Checkpoint criado no admin**: você precisa do `curso_id` que aparece na URL `/admin/courses/v2/<id>`. Esse curso vazio é criado manualmente antes da etapa 5.
+
+## Instalação
 
 ```bash
-# Usando o registro de carreiras/níveis já incluído:
-python scripts/obter_transcricoes_cursos.py --carreira governanca_de_dados --nivel 1
+python -m venv .venv
+.venv\Scripts\activate            # Windows
+# source .venv/bin/activate       # Linux/macOS
 
-# Ou passando IDs manualmente:
-python scripts/obter_transcricoes_cursos.py \
-  --nome_saida governanca_de_dados_nivel_1 \
-  --ids 3713,4631,4632,3714,4633,3716,4635,3717,5166,4634
+pip install -r requirements.txt
+playwright install                # só necessário para a etapa 5
 
-# Para ver as carreiras/níveis já mapeados:
-python scripts/obter_transcricoes_cursos.py --listar
+cp .env.example .env              # depois edite com suas credenciais
 ```
 
-- Saída: [`trilha/<nome_saida>.json`](./trilha/) já no formato esperado pelo próximo script.
+---
 
-### 2) Gerar os resumos dos cursos
+## Como usar
 
-```bash
-# Atalho via carreira/nível (monta o nome do arquivo automaticamente):
-python scripts/checkpoint_criar_resumos_cursos.py --carreira governanca_de_dados --nivel 1
+### 🟢 Modo com Claude Code (recomendado)
 
-# Ou explicitando o(s) arquivo(s):
-python scripts/checkpoint_criar_resumos_cursos.py --input_files governanca_de_dados_nivel_1.json
+Este é o modo que temos usado. Você conversa com o Claude Code no terminal (ou VS Code), ele dispara os scripts em background, monitora saídas e te consulta em decisões.
 
-# Anthropic + batch ativo por padrão (50% off). Para forçar sync (debug):
-python scripts/checkpoint_criar_resumos_cursos.py --carreira governanca_de_dados --nivel 1 --no-batch
-```
+**Um exemplo de sessão típica:**
 
-- Saída: `output/checkpoints/resumos_<nome>.json` (e `.jsonl`).
+> **Você:** "Vamos criar um checkpoint pra Engenharia de Dados nível 1."
+>
+> **Claude Code:** _"Essa carreira não está cadastrada em [`scripts/carreiras_niveis.py`](./scripts/carreiras_niveis.py). Me passa: slug (ex.: `engenharia_de_dados`), lista de IDs dos cursos do nível 1 na ordem da trilha, e nome oficial pros prompts."_
+>
+> **Você:** "Slug `engenharia_de_dados`, IDs `1234,5678,9012,...`, nome `Engenharia de Dados`."
+>
+> **Claude Code:** cadastra no arquivo, dispara etapa 1 (API), reporta `8/8 cursos em 5s`. Dispara etapa 2 (resumos com Opus, batch). Dispara etapa 3 (teórica). Dispara etapa 4 (prática com `--batch`). Aponta pra você os dois TXTs prontos e diz: _"Aguardando okay do coordenador + `curso_id` para publicar."_
+>
+> **Você:** "OK do coordenador, `curso_id` 6554."
+>
+> **Claude Code:** dispara as 4 sub-etapas da publicação (`criar_secoes`, `criar_atividade_apresentacao`, `criar_atividades_prova_teorica`, `criar_atividades_prova_pratica`) em sequência, reportando cada uma. Se algum passo falhar (timeout de login, por exemplo), tenta de novo automaticamente.
 
-### 3) Gerar a prova teórica
+**O que o assistente faz por você:**
 
-```bash
-python scripts/gerar_prova_teorica_do_zero.py \
-  --nivel <1, 2, 3> \
-  --carreira "Nome Carreira" \
-  --resumos_arquivo output/checkpoints/resumos_<nome>.json \
-  --max_questoes 10 --min_por_curso 1 --max_por_curso 2 --domains_window 3
-```
+- Cadastra novas carreiras/níveis no [`scripts/carreiras_niveis.py`](./scripts/carreiras_niveis.py).
+- Dispara cada script com os argumentos certos, em background.
+- Monitora saída e detecta problemas (parser divergente, teto matemático de exercícios, timeout de rede, credencial inválida).
+- Alerta sobre situações fora do padrão (ex.: "só 9 exercícios em vez de 20 — parece bug no parser").
+- Retenta falhas transitórias automaticamente.
+- Pausa e pergunta em decisões (trocar de modelo, gastar mais tokens, corrigir prompt, aceitar 18 em vez de 20).
 
-- Saída: `output/cursos_checkpoint/prova_teorica_<slug_carreira>_nivel_<n>.txt`
+**O que você faz:**
 
-### 4) Gerar a prova prática
+- Fornece os dados de entrada (carreira, IDs, `curso_id`).
+- Revisa os TXTs antes da publicação (mandar pro coordenador).
+- Aprova/redireciona quando o assistente pausa pra decidir.
+- Confirma o okay final para publicar.
 
-```bash
-python scripts/gerar_prova_pratica_do_zero.py \
-  --nivel <1, 2, 3> \
-  --carreira "Nome Carreira" \
-  --resumos_arquivo output/checkpoints/resumos_<nome>.json
-```
+### 🔵 Modo manual (CLI puro)
 
-- Saída: `output/cursos_checkpoint/prova_pratica_<slug_carreira>_nivel_<n>.txt`
-
-### 5) Publicar no admin da Alura (Playwright)
-
-Cria seções e atividades no curso de checkpoint (`/admin/courses/v2/<curso_id>`).
+Se você não vai usar o Claude Code, o pipeline roda 100% na mão. Sequência para gerar e publicar o checkpoint de uma carreira/nível:
 
 ```bash
-# Cria as 3 seções (Apresentação, Prova teórica, Prova prática) e marca a teórica como prova
+# 1) Cadastre a carreira/nível em scripts/carreiras_niveis.py (se não existir)
+
+# 2) Coleta transcrições via API Alura
+python scripts/obter_transcricoes_cursos.py --carreira <slug> --nivel <n>
+
+# 3) Gera resumos (batch Anthropic automático se ≥2 chamadas)
+python scripts/checkpoint_criar_resumos_cursos.py --carreira <slug> --nivel <n>
+
+# 4) Gera prova teórica (20 questões, batch automático nas fases 1 e 2)
+python scripts/gerar_prova_teorica_do_zero.py --nivel <n> --carreira "Nome Oficial" \
+  --resumos_arquivo output/checkpoints/resumos_<slug>_nivel_<n>.json \
+  --max_questoes 20 --min_por_curso 1 --max_por_curso 3 --domains_window 3
+
+# 5) Gera prova prática (batch opt-in com --batch)
+python scripts/gerar_prova_pratica_do_zero.py --nivel <n> --carreira "Nome Oficial" \
+  --resumos_arquivo output/checkpoints/resumos_<slug>_nivel_<n>.json --batch
+
+# 6) REVISE os TXTs gerados em output/cursos_checkpoint/ e envie ao coordenador
+#    Só siga para publicação depois do okay dele.
+
+# 7) Publica no admin (precisa do curso_id, criar o curso de checkpoint vazio antes)
 python scripts/upload_checkpoint_alura.py --curso_id <ID> --etapa criar_secoes
-
-# Cria a atividade "Etapas do projeto" (Explicação) na seção Apresentação
-python scripts/upload_checkpoint_alura.py --curso_id <ID> --etapa criar_atividade_apresentacao --nivel 1
-
-# Cria 1 atividade "Única escolha" por exercício do TXT da prova teórica
+python scripts/upload_checkpoint_alura.py --curso_id <ID> --etapa criar_atividade_apresentacao --nivel <n>
 python scripts/upload_checkpoint_alura.py --curso_id <ID> --etapa criar_atividades_prova_teorica \
-  --carreira "Governança de Dados" --nivel 1
-# Para validar antes de processar todos: --limite 1; para retomar após criação parcial: --offset N
-
-# Cria 1 atividade "Explicação" por subtítulo da prova prática + 1 Conclusão hardcoded
+  --carreira "Nome Oficial" --nivel <n>
 python scripts/upload_checkpoint_alura.py --curso_id <ID> --etapa criar_atividades_prova_pratica \
-  --carreira "Governança de Dados" --nivel 1
+  --carreira "Nome Oficial" --nivel <n>
 ```
 
-- Modo padrão: janela visível (headful). Use `--headless` para rodar em background.
-- Idempotência parcial: a criação de seções e atividades **não é reversível** — um rerun cria duplicatas. Use `--limite N` / `--offset N` para retomar.
+**Comandos auxiliares:**
+
+```bash
+# Listar carreiras/níveis já mapeados
+python scripts/obter_transcricoes_cursos.py --listar
+
+# Re-subir apenas exercícios específicos da teórica (após um run parcial)
+python scripts/upload_checkpoint_alura.py --curso_id <ID> --etapa criar_atividades_prova_teorica \
+  --carreira "Nome Oficial" --nivel <n> --indices 1,5,7
+
+# Forçar sync na etapa 2 (debug, sem batch)
+python scripts/checkpoint_criar_resumos_cursos.py --carreira <slug> --nivel <n> --no-batch
+```
+
+---
+
+## Etapa por etapa — detalhes técnicos
+
+### 1) `obter_transcricoes_cursos.py` — API Alura
+
+Chama `https://cursos.alura.com.br/api/course/{id}` para cada curso da carreira/nível, extrai o texto das atividades e grava um JSON no formato:
+
+```json
+[
+  {"id": 5869, "nome": "...", "link": "https://cursos.alura.com.br/course/<slug>",
+   "transcricao": ["Atividade 1 - Título\n<texto>", "Atividade 2 - ...", ...]}
+]
+```
+
+- Inclui atividades do tipo `VIDEO`, `HQ_EXPLANATION` e `TEXT_CONTENT` (materiais curados como "Para saber mais", tabelas comparativas, "O que aprendemos?"). Ignora `SINGLE_CHOICE` para não poluir o resumo.
+- Throttle de 150ms entre chamadas (rate limit da API é 10 req/s).
+- Sem login por EMAIL/PASSWORD. Só precisa de `ALURA_API_TOKEN`.
+
+### 2) `checkpoint_criar_resumos_cursos.py` — Resumos LLM
+
+Lê o JSON de transcrições e gera, para cada curso, um resumo estruturado (fonte única de verdade das provas):
+
+```json
+{
+  "tema_central": "frase curta sobre o que o curso aborda",
+  "conteudos_testaveis": [
+    {"topico": "...", "nivel": "central|complementar", "tipo": "conceitual|procedimental",
+     "habilidade": "...", "evidencia_de_ensino": "...", "armadilhas_comuns": ["..."]}
+  ],
+  "ferramentas_usadas": ["..."]
+}
+```
+
+- Uma chamada por vídeo/atividade (fallback de chunking para textos muito longos).
+- Batch Anthropic automático quando ≥2 chamadas por curso (50% off).
+- Cache de prompts também ativo (90% off em hits) — funciona se os blocks estáticos atingirem 1024 tokens (Sonnet/Opus) ou 2048 (Haiku).
+- Provider detectado pelo prefixo do `MODEL`: `gpt-*`/`o1-*` → OpenAI, `claude-*` → Anthropic. Padrão atual: `claude-opus-4-6`.
+
+### 3) `gerar_prova_teorica_do_zero.py` — Prova teórica
+
+Gera 20 questões de múltipla escolha (4 alternativas + justificativas). Fluxo interno em 4 fases:
+
+| Fase | O que faz | Modo | Modelo padrão |
+|---|---|---|---|
+| 1 | Gera ideias de questões por curso | **Batch** (≥2 cursos) | `MODEL_IDEAS` = `claude-opus-4-6` |
+| 2 | Transforma ideias em múltipla escolha (mínimo por curso) | **Batch** (≥2 questões) | `MODEL_FORMAT` = `claude-opus-4-6` |
+| 3 | Completa até atingir `--max_questoes` | **Sync** (loop iterativo com estado) | `MODEL_FORMAT` |
+| 4 | Ranqueia dificuldade 1–5 e ordena ascendente | **Sync** (1 chamada única) | `MODEL_RANK` = `claude-opus-4-6` |
+
+**Teto matemático:** o total possível é `num_cursos × max_por_curso`. Se você pedir 20 questões numa carreira com 6 cursos e `max_por_curso=3`, o teto é 18 e o script para lá. Solução: aumentar `--max_por_curso 4`.
+
+**Parser tolerante:** o parser (`_parse_exercise_ideas_verbatim`) aceita markdown bold, cabeçalhos `##`, e sinônimos comuns nos marcadores (`Enunciado`/`Pergunta`/`Questão` = `Texto da questão`; `Resolução`/`Solução`/`Resposta correta` = `Resposta`; `Conceito`/`Tópico` = `Conceito abordado`). O prompt em `_ask_exercise_ideas` impõe formato estrito — o parser é rede de segurança.
+
+**Domínios:** usa uma lista padrão de empresas fictícias (Bytebank, Serenatto, Freelando, etc.). Substituível via `--domains_arquivo caminho.json`.
+
+### 4) `gerar_prova_pratica_do_zero.py` — Prova prática (Aula 3)
+
+Gera 1 arquivo TXT com: descrição do projeto, ambiente, 4 etapas com dificuldade crescente, pergunta-chave por etapa, missão passo a passo, dicas de troubleshooting, matriz de cobertura (auditoria mapeando cursos → etapas).
+
+- **1 única chamada LLM** (`MODEL_GEN` = `claude-opus-4-6`).
+- Batch **opt-in** via `--batch` (50% off, latência 5–30 min).
+- **Sem nuvem paga:** AWS/Azure/GCP proibidos (custo pro aluno).
+- **Datasets inline** (CSV/JSON, 30–120 linhas) só aparecem quando a carreira envolve dados (heurística automática, override com `--modo_dados com|sem|auto`).
+- **Perfil da carreira** (programática vs conceitual): heurística baseada em % de `conteudos_testaveis` com `tipo: procedimental`. Em carreiras conceituais (ex.: governança), o system prompt orienta entregáveis documentais/diagramáticos.
+
+### 5) `upload_checkpoint_alura.py` — Publicação (Playwright)
+
+Automação Playwright que cria seções e atividades direto no admin da Alura.
+
+| Etapa CLI | O que faz |
+|---|---|
+| `criar_secoes` | Cria as 3 seções (Apresentação, Prova teórica, Prova prática) e marca a teórica como `É prova?` |
+| `criar_atividade_apresentacao` | Cria 1 atividade Explicação "Etapas do projeto" na seção Apresentação |
+| `criar_atividades_prova_teorica` | Cria 1 atividade "Única escolha" por exercício do TXT da teórica |
+| `criar_atividades_prova_pratica` | Cria 1 atividade Explicação por subtítulo da prática + 1 Conclusão hardcoded |
+| `desativar_atividades_prova_teorica` | Desativa atividades da prova teórica que não estão numa lista de títulos a manter |
+
+**Flags úteis:**
+
+- `--indices 1,5,7`: sobe apenas os exercícios das posições listadas (1-based). Útil para re-subir quem falhou após um run parcial.
+- `--limite N`: processa apenas os N primeiros exercícios (validação inicial).
+- `--offset N`: pula os N primeiros exercícios (retomada após criação parcial).
+- `--headless`: roda sem janela visível.
+
+**Detalhes técnicos:**
+
+- Admin usa **EasyMDE/CodeMirror** em campos de markdown — o script preenche via JS (`CodeMirror.setValue()` + `.save()`).
+- Dropdown de tipo hierárquico (`select#chooseTask`) — seleção via `data-task-enum` (HQ_EXPLANATION, SINGLE_CHOICE).
+- Alternativas usam names HTML específicos (`alternatives[N].text`, `alternatives[N].opinion`, `alternatives[N].correct`).
+- **Idempotência parcial:** criação de seções e atividades **não é reversível** — um rerun cria duplicatas. Use `--indices` / `--offset` / `--limite` para retomar.
+
+---
+
+## Convenções importantes
+
+- **Nomenclatura dos arquivos:** `<slug_carreira>_nivel_<1|2|3>.json` (ex.: `governanca_de_dados_nivel_1.json`). Todos os scripts assumem esse padrão.
+- **Slug da carreira:** snake_case, sem acento (ex.: `desenvolvimento_back_end_nodejs_v2`).
+- **Nome oficial da carreira:** o que vai no `--carreira` da CLI e nos prompts. Pode ter espaço, hífen, acento (ex.: `"Desenvolvimento Back-End Node.js v2"`).
+- **Fidelidade à aula:** os scripts de geração **não podem inventar** conceitos, ferramentas ou técnicas que não estejam nos resumos. Regra codificada nos prompts — não relaxar.
+- **Linguagem neutra:** "pessoa desenvolvedora", "a empresa te contratou". **Nunca** "você foi contratado" nem masculino genérico.
+- **Sem nuvem paga na prática:** AWS, Azure, GCP proibidos.
 
 ---
 
@@ -108,17 +249,17 @@ python scripts/upload_checkpoint_alura.py --curso_id <ID> --etapa criar_atividad
 ```text
 criar-checkpoint/
 ├── .env.example                     # modelo de credenciais
-├── .gitignore
-├── README.md
+├── CLAUDE.md                        # contexto para assistentes de código
+├── README.md                        # este arquivo
 ├── requirements.txt
 ├── scripts/
-│   ├── _scraping_utils.py                    # utilitário: limpeza de texto
+│   ├── _scraping_utils.py                    # legado (não é mais usado)
 │   ├── carreiras_niveis.py                   # mapa carreira/nível → IDs dos cursos
-│   ├── obter_transcricoes_cursos.py          # 1) scraping das transcrições
-│   ├── checkpoint_criar_resumos_cursos.py    # 2) resumos dos cursos
+│   ├── obter_transcricoes_cursos.py          # 1) API Alura de cursos
+│   ├── checkpoint_criar_resumos_cursos.py    # 2) resumos LLM
 │   ├── gerar_prova_teorica_do_zero.py        # 3) prova teórica (múltipla escolha)
 │   ├── gerar_prova_pratica_do_zero.py        # 4) prova prática (Aula 3)
-│   └── upload_checkpoint_alura.py            # 5) publica seções/atividades no admin Alura
+│   └── upload_checkpoint_alura.py            # 5) publica seções/atividades no admin
 ├── trilha/                          # saída da etapa 1 (entrada da etapa 2)
 └── output/
     ├── checkpoints/                 # saída da etapa 2 (entrada das etapas 3 e 4)
@@ -127,159 +268,19 @@ criar-checkpoint/
 
 ---
 
-## Pré-requisitos
+## Troubleshooting comum
 
-- Python 3.10+
-- Conta ativa na plataforma da Alura (email + senha) — para o scraping e o upload no admin.
-- **Pelo menos uma** chave válida de LLM:
-  - **OpenAI API** (`OPENAI_CREDENTIALS`) — usada quando o MODEL começa com `gpt-*` ou `o1/o3/o4-*`.
-  - **Anthropic API** (`ANTHROPIC_API_KEY`) — usada quando o MODEL começa com `claude-*`. Configuração premium atual usa Claude Opus 4.7 / Sonnet 4.6 / Haiku 4.5.
+**Etapa 1 retorna `HTTP 401`/`403`**
+Token da API está inválido ou expirado. Cheque `ALURA_API_TOKEN` no `.env`.
 
-## Instalação
+**Etapa 3 gerou menos exercícios do que `--max_questoes`**
+Provavelmente atingiu o teto matemático `num_cursos × max_por_curso`. Aumente `--max_por_curso`.
 
-```bash
-# 1) Criar e ativar um venv (recomendado)
-python -m venv .venv
-.venv\Scripts\activate              # Windows
-# source .venv/bin/activate         # Linux/macOS
+**Etapa 5 falha no login com `TimeoutError: Timeout 15000ms exceeded`**
+Falha transitória do `wait_for_load_state("networkidle")`. Basta re-executar o comando — geralmente passa na segunda tentativa.
 
-# 2) Instalar dependências Python
-pip install -r requirements.txt
+**Uploader pulou um exercício da teórica**
+Provavelmente o exercício tem formato levemente fora do padrão que o parser espera. O parser da geração é tolerante, mas o parser do uploader espera marcadores exatos. Cheque o TXT — pode faltar `Título:`, `Pergunta:` ou linha de separação.
 
-# 3) Instalar os browsers do Playwright (necessário para o scraping)
-playwright install
-
-# 4) Configurar credenciais
-cp .env.example .env                # Linux/macOS
-# copy .env.example .env            # Windows
-# Edite .env e preencha: OPENAI_CREDENTIALS, EMAIL, PASSWORD
-```
-
----
-
-## Detalhes de cada script
-
-### `scripts/obter_transcricoes_cursos.py`
-
-Faz login na Alura via Playwright, navega pelas seções de cada curso informado e extrai a transcrição de cada vídeo.
-
-- **Entrada:** IDs dos cursos (por `--carreira`/`--nivel` registrados em [`scripts/carreiras_niveis.py`](./scripts/carreiras_niveis.py) ou via `--ids`).
-- **Saída:** JSON em [`trilha/`](./trilha/) no formato:
-  ```json
-  [
-    {"id": 3713, "nome": "...", "link": "https://...", "transcricao": ["texto vídeo 1", "texto vídeo 2", ...]}
-  ]
-  ```
-- Flags úteis: `--headful` (navegador visível para debug), `--listar` (mostra as carreiras/níveis já mapeados).
-
-> Este script é uma **versão enxuta** do `get_course_transcription` do projeto `SCRAPING_FORMAÇÕES`, trazendo só o que importa para o fluxo de checkpoints. Para adicionar novas carreiras/níveis, edite o dicionário em [`scripts/carreiras_niveis.py`](./scripts/carreiras_niveis.py).
-
-### `scripts/checkpoint_criar_resumos_cursos.py`
-
-Lê os JSONs de transcrições da pasta [`trilha/`](./trilha/) e gera, para cada curso, um resumo de **conteúdos testáveis** (filtro qualitativo: só entra o que cabe virar questão de prova):
-
-```json
-{
-  "tema_central": "frase curta sobre o que o curso aborda",
-  "conteudos_testaveis": [
-    {
-      "topico": "Diferenciação entre data owner, steward e custodian",
-      "nivel": "central",
-      "tipo": "conceitual",
-      "habilidade": "Atribuir responsabilidades a cada papel em cenário concreto",
-      "evidencia_de_ensino": "Aula dedicada com organograma e exercício de classificação.",
-      "armadilhas_comuns": ["Confundir owner com steward"]
-    }
-  ],
-  "ferramentas_usadas": ["Excel", "Draw.io"]
-}
-```
-
-- Uma chamada ao LLM por vídeo (com fallback de chunking para vídeos muito longos).
-- Paralelismo por vídeo via `ThreadPoolExecutor` (ajuste `MAX_WORKERS` conforme rate limit).
-- Provider escolhido pelo prefixo do MODEL (`gpt-*`/`o*-*` → OpenAI, `claude-*` → Anthropic).
-- Configuração premium padrão: `claude-opus-4-7` (Anthropic). Alternativas comentadas no topo do script.
-- Para Anthropic com ≥2 vídeos por curso: usa Message Batches API automaticamente (50% off). Cache também ativo (90% off em hits) — funciona apenas se o block estático atinge o mínimo (1024 tokens Sonnet/Opus, 2048 Haiku).
-
-**Como usar:**
-
-```bash
-python scripts/checkpoint_criar_resumos_cursos.py --carreira governanca_de_dados --nivel 1
-```
-
-### `scripts/gerar_prova_teorica_do_zero.py`
-
-Gera a **prova teórica** (múltipla escolha, 4 alternativas, com justificativas) a partir dos resumos do nível.
-
-Fluxo interno:
-
-1. Gera **ideias de questões** por curso (`MODEL_IDEAS`, default `claude-sonnet-4-6`).
-2. Transforma cada ideia em **múltipla escolha** (`MODEL_FORMAT`, default `claude-sonnet-4-6`).
-3. (Opcional) Ajusta o tamanho das alternativas com `--ajustar_alternativas`.
-4. Ranqueia por **dificuldade** 1–5 (`MODEL_RANK`, default `claude-haiku-4-5-20251001`) e ordena ascendente.
-
-Para Anthropic, fases 1 e 2 viram batch automaticamente quando há ≥2 cursos/questões. Flag `--no-batch` força sync.
-
-Domínios: usa uma lista padrão de empresas fictícias (Bytebank, Serenatto, Freelando, etc.). Pode-se passar `--domains_arquivo caminho.json` para sobrescrever.
-
-Exemplo (Governança de Dados, nível 1):
-
-```bash
-python scripts/gerar_prova_teorica_do_zero.py \
-  --nivel 1 \
-  --carreira "governanca_de_dados" \
-  --resumos_arquivo output/checkpoints/resumos_governanca_de_dados_nivel_1.json \
-  --max_questoes 20 --min_por_curso 2 --max_por_curso 3 \
-  --domains_window 5 --ajustar_alternativas
-```
-
-### `scripts/gerar_prova_pratica_do_zero.py`
-
-Gera a **prova prática** (Aula 3 do Checkpoint) em formato texto estruturado, com:
-
-- Descrição do projeto, ambiente, 4 etapas com dificuldade crescente.
-- Pergunta-chave, missão passo a passo e dicas de troubleshooting por etapa.
-- Matriz de cobertura (auditoria) mapeando cada curso do nível às etapas.
-- Datasets inline (CSV/JSON) **somente** quando a carreira envolver dados (heurística automática, override com `--modo_dados com|sem|auto`).
-- Regra: **não** usa ferramentas de nuvem pagas (AWS, Azure, GCP etc.).
-- **Perfil da carreira** (programatica vs conceitual): heurística baseada em % de `conteudos_testaveis` com `tipo: procedimental`. Em carreiras conceituais (ex.: governança), o system prompt orienta entregáveis documentais/diagramáticos.
-- Modelo padrão: `claude-opus-4-7` (1 chamada apenas, sem batch).
-
-```bash
-python scripts/gerar_prova_pratica_do_zero.py \
-  --nivel 1 \
-  --carreira "governanca_de_dados" \
-  --resumos_arquivo output/checkpoints/resumos_governanca_de_dados_nivel_1.json \
-  --modo_dados auto --verbose
-```
-
-### `scripts/upload_checkpoint_alura.py`
-
-Automação Playwright que cria seções e atividades direto no admin da Alura. Cobre 5 etapas distintas:
-
-| Etapa CLI | O que faz |
-|---|---|
-| `criar_secoes` | Cria as 3 seções (Apresentação, Prova teórica, Prova prática) e marca a Prova teórica como `É prova?` |
-| `marcar_prova_teorica` | Apenas marca o checkbox `É prova?` da seção Prova teórica (útil quando as seções já existem) |
-| `criar_atividade_apresentacao` | Cria 1 atividade Explicação "Etapas do projeto" na seção Apresentação |
-| `criar_atividades_prova_teorica` | Cria 1 atividade "Única escolha" por exercício do TXT da prova teórica |
-| `criar_atividades_prova_pratica` | Cria 1 atividade Explicação por subtítulo da prova prática (Descrição, Antes de começar, Preparando o ambiente, 4 Etapas) + 1 Conclusão hardcoded |
-
-Detalhes técnicos:
-
-- O admin usa **EasyMDE/CodeMirror** em todos os campos de markdown — o script preenche via `CodeMirror.setValue()` + `.save()`.
-- O dropdown de tipo é hierárquico (`select#chooseTask`); seleção via `data-task-enum` (HQ_EXPLANATION, SINGLE_CHOICE).
-- Alternativas usam names HTML específicos (`alternatives[N].text`, `alternatives[N].opinion`, `alternatives[N].correct`).
-- Login adapta-se a trackers lentos (usa `wait_until="domcontentloaded"` em vez de `load`).
-- Flags úteis: `--limite N` (processa apenas os N primeiros — validação inicial), `--offset N` (pula os N primeiros — retomada após criação parcial), `--headless` (sem janela).
-
----
-
-## Convenções
-
-- **Nome dos arquivos de transcrição:** `<nome_da_carreira>_nivel_<1|2|3>.json` (ex.: `governanca_de_dados_nivel_1.json`). O script de scraping já grava seguindo esse padrão quando usado com `--carreira` + `--nivel`.
-- **Nome dos arquivos de resumo:** `resumos_<nome_da_carreira>_nivel_<1|2|3>.json` — gerados automaticamente.
-- **Linguagem neutra nas questões:** prefira "pessoa desenvolvedora", "a empresa te contratou"; nunca "você foi contratado" ou masculino genérico.
-- **Fidelidade à aula:** nenhum dos scripts inventa conceitos — tudo é derivado dos resumos, que por sua vez vêm das transcrições.
-- **Schema dos resumos:** filtro qualitativo (`conteudos_testaveis` apenas), não catalogação exaustiva. Cada item tem `topico, nivel, tipo, habilidade, evidencia_de_ensino, armadilhas_comuns`.
-- **Switch de provider LLM:** definido pelo prefixo do MODEL no topo de cada script. `gpt-*`/`o1/o3/o4-*` → OpenAI; `claude-*` → Anthropic. Para Anthropic com várias chamadas, batch+cache automáticos.
+**Custo do run parecendo alto**
+Confirme que o Opus só está sendo usado onde faz sentido. Se estiver rodando várias iterações, considere: (a) rodar prática com `--batch` (50% off), (b) validar estrutura com `--limite 1` antes de um upload completo.
