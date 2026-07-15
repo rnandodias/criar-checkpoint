@@ -59,7 +59,7 @@ if sys.platform == "win32":
 # Config de modelos
 # =========================
 # Geração da prova prática: top de linha (segue restrições rigorosas de escopo)
-MODEL_GEN = "claude-opus-4-6"
+MODEL_GEN = "claude-opus-4-8"
 TEMP = 0.0
 
 # Alternativas:
@@ -67,8 +67,16 @@ TEMP = 0.0
 # MODEL_GEN = "gpt-5" / "gpt-4o-2024-08-06"
 SINGLE_PASS_CHAR_LIMIT = 300_000
 
-INPUT_DIR = Path(__file__).resolve().parent.parent / "output" / "checkpoints"
-OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output" / "cursos_checkpoint"
+OUTPUT_BASE = Path(__file__).resolve().parent.parent / "output"
+
+
+def _projeto_dir(carreira: str, nivel: int) -> Path:
+    """Pasta do projeto: output/<slug>_nivel_<n>/. Usa _slugify definido mais abaixo."""
+    return OUTPUT_BASE / f"{_slugify(carreira)}_nivel_{nivel}"
+
+
+# Reforço opcional injetado via --reforco_extra (usado pelo revisor 4.5 no rerun automático).
+REFORCO_EXTRA: str = ""
 
 # Schema novo (etapa 2): resumo por curso é {tema_central, conteudos_testaveis[], ferramentas_usadas[]}.
 
@@ -237,6 +245,49 @@ Regras gerais (mantenha TODAS):
 - **Dicas**: inclua **“Dicas de troubleshooting”** por etapa (sem resolver completamente).
 - **Sem links externos**.
 
+# === Reforço perfil profissional (2026-07) — remover este bloco para voltar ao prompt original ===
+- **Análise prévia do perfil profissional (REGRA DURA)**:
+  ANTES de escolher o domínio e propor o projeto, REFLITA — usando estritamente os resumos — sobre:
+    (a) O dia-a-dia REAL dessa profissão: o que essa pessoa produz, para quem, com que frequência?
+    (b) As ENTREGAS PROFISSIONAIS TÍPICAS (não exercícios acadêmicos):
+        ex.: pipelines em produção, dashboards executivos, APIs REST em uso, modelos servidos,
+        políticas de governança escritas, arquiteturas documentadas, integrações entre sistemas.
+    (c) Os DESAFIOS RECORRENTES da profissão (qualidade, escala, latência, integração, custo,
+        governança, observabilidade, retenção, drift, segurança) — que devem estar refletidos no
+        cenário como pano de fundo realista.
+  Use essa análise para propor um projeto AUTÊNTICO à profissão. Se uma pessoa profissional experiente
+  lesse o cenário e reagisse com "isso não é o que a gente faz de verdade", o cenário está errado —
+  proponha outro. Não gere "trabalhinho" com aparência profissional; gere um recorte fiel do que
+  aquela profissão entrega no mundo real.
+- **Armadilhas comuns a evitar** (falhas recorrentes de provas geradas por LLM):
+  * Engenharia de Dados que vira análise exploratória em notebook (deveria ser pipeline em produção)
+  * Back-end que só faz CRUD isolado (deveria integrar com outros sistemas, tratar erros, ter deploy)
+  * Análise de Dados que para na limpeza (deveria entregar decisão de negócio, dashboard, relatório)
+  * ML sem servir o modelo (deveria expor via API, batch, ou dashboard de predição)
+  * Carreira conceitual sem entregável concreto (deveria produzir documento, política, diagrama, planilha)
+  * Cenário genérico "empresa X está migrando para dados" sem definir para onde e por quê
+# === fim reforço perfil ===
+
+# === Proibição de meta-comentários (2026-07) — remover este bloco para voltar ao prompt original ===
+- **Proibição absoluta de meta-comentários (REGRA DURA — sem exceções)**:
+  NÃO faça observações sobre o próprio texto, sobre as regras que você está seguindo,
+  ou sobre o processo de geração. As regras devem estar APLICADAS no texto — NUNCA
+  citadas, explicadas ou defendidas. O texto entregue deve parecer escrito diretamente
+  para a pessoa aluna, sem NENHUMA pista das diretrizes que o guiaram.
+
+  Exemplos do que NÃO fazer (falhas já observadas em runs anteriores):
+    * "A linguagem neutra é mantida: a empresa te contratou..."   ← proibido
+    * "Conforme as regras, aqui usamos entregáveis documentais..." ← proibido
+    * "Seguindo o formato pedido, a etapa 1 traz..."               ← proibido
+    * "Note que preservamos fidelidade à aula..."                  ← proibido
+    * "Aqui a empresa te contratou (linguagem inclusiva)..."      ← proibido
+    * "Este projeto foi desenhado com base nos resumos..."         ← proibido
+    * Qualquer sentença que descreva o texto em vez de compor o texto.
+
+  Se quiser mencionar linguagem neutra, USE-A — não anuncie que a está usando.
+  Se quiser respeitar a fidelidade à aula, RESPEITE — não afirme que está respeitando.
+# === fim proibição meta-comentários ===
+
 Formato de SAÍDA (TEXTO PURO) — siga exatamente:
 
 # 03.Prova prática
@@ -329,7 +380,8 @@ def _model_supports_temperature(model: str) -> bool:
     m = (model or "").lower()
     return not (
         m.startswith("gpt-5") or m.startswith("o1") or m.startswith("o3") or m.startswith("o4")
-        or m.startswith("claude-opus-4-7") or m.startswith("claude-opus-5")
+        or m.startswith("claude-opus-4-7") or m.startswith("claude-opus-4-8")
+        or m.startswith("claude-opus-5")
     )
 
 
@@ -729,10 +781,13 @@ def gerar_aula3_txt(
     print(f"Fase 2/4: Gerando texto da prova ({MODEL_GEN})...")
     t2 = time.perf_counter()
     _progress("  → Solicitando ao modelo", 0, 1)
+    _system = system_prompt_aula3_txt()
+    if REFORCO_EXTRA:
+        _system = f"{_system}\n\n# === REFORÇO INJETADO PELO REVISOR (rerun) ===\n{REFORCO_EXTRA}\n# === fim reforço injetado ==="
     txt = _chat(
         client,
         MODEL_GEN,
-        system_prompt_aula3_txt(),
+        _system,
         user_prompt_aula3_txt(
             nivel_str=f"Nível {nivel}",
             carreira_str=carreira or "",
@@ -794,7 +849,8 @@ def main():
     parser = argparse.ArgumentParser(description="Gerar Aula 3 (Prova prática) — TXT, datasets apenas quando fizer sentido para a carreira, ajuste local 30–120, progresso e tempo total.")
     parser.add_argument("--nivel", type=int, choices=[1,2,3], required=True)
     parser.add_argument("--carreira", type=str, default="")
-    parser.add_argument("--resumos_arquivo", type=str, required=True, help="Caminho para JSON de resumos do nível (da carreira).")
+    parser.add_argument("--resumos_arquivo", type=str, default="", help="Caminho para JSON de resumos. Se omitido, deriva de output/<slug>_nivel_<n>/resumos.json.")
+    parser.add_argument("--reforco_extra", type=str, default="", help="(Interno — usado pelo revisor) Caminho para arquivo com texto de reforço a concatenar ao system prompt.")
     parser.add_argument("--domains_arquivo", type=str, default="")
     parser.add_argument("--ferramentas_arquivo", type=str, default="")
     parser.add_argument("--modo_dados", type=str, choices=["auto","com","sem"], default="auto", help="auto (padrão): detecta pelo contexto; com: força datasets; sem: nunca gera datasets.")
@@ -808,6 +864,15 @@ def main():
         global _USE_BATCH
         _USE_BATCH = True
         print("[Config] Modo batch ativado (50% off, latência maior).")
+
+    # Reforço opcional (usado pelo revisor 4.5 no rerun automático)
+    global REFORCO_EXTRA
+    if args.reforco_extra:
+        p = Path(args.reforco_extra)
+        if not p.exists():
+            raise FileNotFoundError(f"Arquivo de reforço não encontrado: {p}")
+        REFORCO_EXTRA = p.read_text(encoding="utf-8").strip()
+        print(f"[Reforço] Injetado a partir de {p} ({len(REFORCO_EXTRA)} chars).")
 
     # Domínios
     if args.domains_arquivo:
@@ -831,13 +896,15 @@ def main():
     else:
         ferramentas_cli = None
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    projeto_dir = _projeto_dir(args.carreira, args.nivel)
+    projeto_dir.mkdir(parents=True, exist_ok=True)
+    resumos_arquivo = args.resumos_arquivo or str(projeto_dir / "resumos.json")
 
     t0 = time.perf_counter()
     txt = gerar_aula3_txt(
         nivel=args.nivel,
         carreira=args.carreira,
-        resumos_arquivo=args.resumos_arquivo,
+        resumos_arquivo=resumos_arquivo,
         domains=domains,
         ferramentas_cli=ferramentas_cli,
         modo_dados=args.modo_dados,
@@ -845,9 +912,7 @@ def main():
     )
     elapsed = time.perf_counter() - t0
 
-    carreira_slug = _slugify(args.carreira)
-    base = f"prova_pratica_{carreira_slug}_nivel_{args.nivel}"
-    out_path = OUTPUT_DIR / f"{base}.txt"
+    out_path = projeto_dir / "prova_pratica.txt"
     out_path.write_text(txt, encoding="utf-8")
     print(f"[OK] TXT salvo em: {out_path}")
 

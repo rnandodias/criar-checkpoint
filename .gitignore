@@ -24,18 +24,13 @@ Thumbs.db
 .claude/settings.local.json
 .claude/projects/
 
-# Artefatos gerados (manter as pastas, ignorar conteúdo)
+# Artefatos gerados (manter apenas os diretórios raiz)
 trilha/*.json
-output/checkpoints/*.json
-output/checkpoints/*.jsonl
-output/cursos_checkpoint/*.txt
-output/cursos_checkpoint/*.md
-output/cursos_checkpoint/*.json
+output/*/
 
 # Spike / diagnóstico do upload Alura (HTMLs, screenshots de erro)
 tmp/
 
-# Manter as pastas no repositório
+# Manter as pastas raiz no repositório
 !trilha/.gitkeep
-!output/checkpoints/.gitkeep
-!output/cursos_checkpoint/.gitkeep
+!output/.gitkeep

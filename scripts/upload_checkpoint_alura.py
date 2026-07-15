@@ -510,9 +510,9 @@ def _resolve_prova_teorica_path(carreira: str, nivel: int, override: str = "") -
         if not p.exists():
             raise FileNotFoundError(f"Arquivo de prova não encontrado: {p}")
         return p
-    base = Path(__file__).resolve().parent.parent / "output" / "cursos_checkpoint"
     slug = _slugify(carreira)
-    candidato = base / f"prova_teorica_{slug}_nivel_{nivel}.txt"
+    base = Path(__file__).resolve().parent.parent / "output" / f"{slug}_nivel_{nivel}"
+    candidato = base / "prova_teorica.txt"
     if candidato.exists():
         return candidato
     raise FileNotFoundError(
@@ -903,9 +903,9 @@ def _resolve_prova_pratica_path(carreira: str, nivel: int, override: str = "") -
         if not p.exists():
             raise FileNotFoundError(f"Arquivo de prova prática não encontrado: {p}")
         return p
-    base = Path(__file__).resolve().parent.parent / "output" / "cursos_checkpoint"
     slug = _slugify(carreira)
-    candidato = base / f"prova_pratica_{slug}_nivel_{nivel}.txt"
+    base = Path(__file__).resolve().parent.parent / "output" / f"{slug}_nivel_{nivel}"
+    candidato = base / "prova_pratica.txt"
     if candidato.exists():
         return candidato
     raise FileNotFoundError(
@@ -1083,9 +1083,9 @@ def _resolve_manter_ativos_path(carreira: str, nivel: int, override: str = "") -
         if not p.exists():
             raise FileNotFoundError(f"Arquivo de títulos a manter ativos não encontrado: {p}")
         return p
-    base = Path(__file__).resolve().parent.parent / "output" / "cursos_checkpoint"
     slug = _slugify(carreira)
-    candidato = base / f"manter_ativos_{slug}_nivel_{nivel}.txt"
+    base = Path(__file__).resolve().parent.parent / "output" / f"{slug}_nivel_{nivel}"
+    candidato = base / "manter_ativos.txt"
     if candidato.exists():
         return candidato
     raise FileNotFoundError(

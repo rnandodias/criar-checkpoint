@@ -59,8 +59,12 @@ OUTPUT_DIR = _SCRIPT_DIR.parent / "trilha"
 
 API_BASE_URL = "https://cursos.alura.com.br/api/course"
 API_TIMEOUT = 60  # segundos por request
-# Rate limit da API: 10 req/s. Usamos 150ms mínimo entre chamadas (~6.6 req/s) por segurança.
-MIN_INTERVAL_SEC = 0.15
+# Rate limit da API: 10 req/s teóricos, mas na prática o servidor rejeita antes.
+# Modo estritamente conservador: 1 request por segundo (sequencial, sem concorrência).
+MIN_INTERVAL_SEC = 1.0
+# Retentativas para 429 (rate limit) e 5xx transitórios.
+RETRY_MAX_ATTEMPTS = 5
+RETRY_BASE_DELAY_SEC = 2.0  # backoff exponencial: 2, 4, 8, 16, 32s
 
 # Atividades cujo `text` compõe a "transcrição" do curso.
 # VIDEO           → transcrição das aulas em vídeo (base histórica do scraping).
@@ -80,15 +84,49 @@ def _get_token() -> str:
 
 
 def _fetch_course(course_id: int, token: str) -> dict:
-    """Busca o JSON de um curso na API. Levanta HTTPError em 4xx/5xx."""
+    """Busca o JSON de um curso na API. Retenta em 429/5xx com backoff exponencial;
+    respeita o header Retry-After quando presente. Levanta HTTPError em 4xx não-transitórios
+    ou quando esgota RETRY_MAX_ATTEMPTS."""
     url = f"{API_BASE_URL}/{course_id}"
     headers = {
         "Authorization": f"Bearer {token}",
         "Accept": "application/json",
     }
-    resp = requests.get(url, headers=headers, timeout=API_TIMEOUT)
-    resp.raise_for_status()
-    return resp.json()
+    last_exc: Optional[requests.HTTPError] = None
+    for attempt in range(1, RETRY_MAX_ATTEMPTS + 1):
+        resp = requests.get(url, headers=headers, timeout=API_TIMEOUT)
+        if resp.status_code < 400:
+            return resp.json()
+
+        # 429 (rate limit) e 5xx (erro transitório do servidor) → retentar.
+        # Demais 4xx (401/403/404 etc.) são definitivos: levanta imediatamente.
+        transitorio = resp.status_code == 429 or 500 <= resp.status_code < 600
+        try:
+            resp.raise_for_status()
+        except requests.HTTPError as e:
+            last_exc = e
+            if not transitorio or attempt == RETRY_MAX_ATTEMPTS:
+                raise
+
+        # Calcula espera: Retry-After (segundos) tem precedência sobre backoff exponencial.
+        retry_after = resp.headers.get("Retry-After")
+        if retry_after:
+            try:
+                delay = float(retry_after)
+            except ValueError:
+                delay = RETRY_BASE_DELAY_SEC * (2 ** (attempt - 1))
+        else:
+            delay = RETRY_BASE_DELAY_SEC * (2 ** (attempt - 1))
+
+        print(
+            f"    [retry {attempt}/{RETRY_MAX_ATTEMPTS - 1}] curso {course_id} "
+            f"HTTP {resp.status_code} — aguardando {delay:.1f}s"
+        )
+        time.sleep(delay)
+
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError(f"Falha inesperada ao buscar curso {course_id}")
 
 
 def _extrair_curso(data: dict, course_id: int) -> dict:

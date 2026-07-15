@@ -16,17 +16,21 @@ Também funciona 100% na mão, via CLI, para quem preferir.
 ## Arquitetura em 30 segundos
 
 ```text
-┌────────────────────────────┐  JSON transcrições  ┌──────────────────────┐  JSON resumo   ┌─────────────────────────┐  TXT prova  ┌────────────────────────┐
-│ 1) obter_transcricoes      │ ──────────────────▶ │ 2) checkpoint_criar  │ ─────────────▶ │ 3) gerar_prova_teorica  │ ─────────▶ │ 5) upload_checkpoint   │
-│    API Alura de cursos     │  trilha/<nome>.json │    resumos (LLM)     │  output/...    │ 4) gerar_prova_pratica  │             │    Playwright + admin  │
-└────────────────────────────┘                     └──────────────────────┘                └─────────────────────────┘             └────────────────────────┘
+1) obter_transcricoes  ──▶ trilha/<carreira>_nivel_<n>.json
+2) checkpoint_criar_resumos_cursos  ──▶  output/<slug>_nivel_<n>/resumos.json
+3) gerar_prova_teorica_do_zero      ──▶  output/<slug>_nivel_<n>/prova_teorica.txt
+3.5) revisar_prova_teorica          ──▶  auto-corrige + gera prova_teorica_relatorio.md
+4) gerar_prova_pratica_do_zero      ──▶  output/<slug>_nivel_<n>/prova_pratica.txt
+4.5) revisar_prova_pratica          ──▶  auto-corrige + gera prova_pratica_relatorio.md
+5) upload_checkpoint_alura          ──▶  publica seções/atividades no admin da Alura
 ```
 
 - Etapa 1 é chamada HTTP (rápida, ~5s para 8 cursos).
-- Etapas 2, 3 e 4 usam LLM Anthropic (**Claude Opus 4-6** em tudo, por padrão).
+- Etapas 2, 3, 3.5, 4 e 4.5 usam LLM Anthropic (**Claude Opus 4-8** em tudo, por padrão).
 - Etapa 5 usa Playwright (janela visível por padrão) para automatizar o admin da Alura.
 - Etapas 2 e 3 (fases 1 e 2) usam **Message Batches API** automaticamente quando ≥2 chamadas (50% off).
 - Etapa 4 tem batch **opt-in** via `--batch`.
+- **Etapas 3.5 e 4.5** rodam depois das etapas 3 e 4 respectivamente: analisam o TXT, auto-corrigem itens com problemas mecânicos, e disparam **rerun automático** (variante 3) quando o problema é sistêmico (≥50% dos exercícios ou ≥3 seções). Zero intervenção manual necessária no caso comum.
 
 ---
 
@@ -105,15 +109,20 @@ python scripts/obter_transcricoes_cursos.py --carreira <slug> --nivel <n>
 python scripts/checkpoint_criar_resumos_cursos.py --carreira <slug> --nivel <n>
 
 # 4) Gera prova teórica (20 questões, batch automático nas fases 1 e 2)
+#    resumos_arquivo é opcional; se omitido, deriva de output/<slug>_nivel_<n>/resumos.json
 python scripts/gerar_prova_teorica_do_zero.py --nivel <n> --carreira "Nome Oficial" \
-  --resumos_arquivo output/checkpoints/resumos_<slug>_nivel_<n>.json \
   --max_questoes 20 --min_por_curso 1 --max_por_curso 3 --domains_window 3
 
-# 5) Gera prova prática (batch opt-in com --batch)
-python scripts/gerar_prova_pratica_do_zero.py --nivel <n> --carreira "Nome Oficial" \
-  --resumos_arquivo output/checkpoints/resumos_<slug>_nivel_<n>.json --batch
+# 4.5) Revisa a prova teórica e auto-corrige o que der (Opus 4-8; escape hatch se problema sistêmico)
+python scripts/revisar_prova_teorica.py --carreira "Nome Oficial" --nivel <n>
 
-# 6) REVISE os TXTs gerados em output/cursos_checkpoint/ e envie ao coordenador
+# 5) Gera prova prática (batch opt-in com --batch)
+python scripts/gerar_prova_pratica_do_zero.py --nivel <n> --carreira "Nome Oficial" --batch
+
+# 5.5) Revisa a prova prática (análise estática + teste de resolvedor + auto-correção)
+python scripts/revisar_prova_pratica.py --carreira "Nome Oficial" --nivel <n>
+
+# 6) REVISE os TXTs em output/<slug>_nivel_<n>/ + o relatório em ...relatorio.md e envie ao coordenador
 #    Só siga para publicação depois do okay dele.
 
 # 7) Publica no admin (precisa do curso_id, criar o curso de checkpoint vazio antes)
@@ -258,12 +267,21 @@ criar-checkpoint/
 │   ├── obter_transcricoes_cursos.py          # 1) API Alura de cursos
 │   ├── checkpoint_criar_resumos_cursos.py    # 2) resumos LLM
 │   ├── gerar_prova_teorica_do_zero.py        # 3) prova teórica (múltipla escolha)
+│   ├── revisar_prova_teorica.py              # 3.5) QA + auto-correção (variantes 2 e 3 automáticas)
 │   ├── gerar_prova_pratica_do_zero.py        # 4) prova prática (Aula 3)
+│   ├── revisar_prova_pratica.py              # 4.5) QA + teste de resolvedor + auto-correção
 │   └── upload_checkpoint_alura.py            # 5) publica seções/atividades no admin
 ├── trilha/                          # saída da etapa 1 (entrada da etapa 2)
 └── output/
-    ├── checkpoints/                 # saída da etapa 2 (entrada das etapas 3 e 4)
-    └── cursos_checkpoint/           # saída final: provas teórica e prática
+    └── <slug>_nivel_<n>/            # uma pasta por projeto (carreira + nível)
+        ├── resumos.json                     # saída da etapa 2
+        ├── resumos.jsonl
+        ├── prova_teorica.txt                # etapa 3 (sobrescrito pela 3.5 se houver correção)
+        ├── prova_teorica.pre_revisao.txt    # 3.5 backup (só se algo foi alterado)
+        ├── prova_teorica_relatorio.md       # 3.5 relatório
+        ├── prova_pratica.txt                # etapa 4
+        ├── prova_pratica.pre_revisao.txt    # 4.5 backup
+        └── prova_pratica_relatorio.md       # 4.5 relatório
 ```
 
 ---

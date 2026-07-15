@@ -49,13 +49,13 @@ if sys.platform == "win32":
 # Configuração de modelos
 # =========================
 # Geração crítica (ideias + transformação em múltipla escolha): "cavalo de carga"
-MODEL_IDEAS = "claude-opus-4-6"
-MODEL_FORMAT = "claude-opus-4-6"
+MODEL_IDEAS = "claude-opus-4-8"
+MODEL_FORMAT = "claude-opus-4-8"
 TEMPERATURE_IDEAS = 0.0
 TEMPERATURE_FORMAT = 0.0
 
 # Ranqueamento (apenas dificuldade — não vale gastar): modelo barato
-MODEL_RANK = "claude-opus-4-6"
+MODEL_RANK = "claude-opus-4-8"
 TEMPERATURE_RANK = 0.0
 
 # Alternativas:
@@ -65,7 +65,16 @@ TEMPERATURE_RANK = 0.0
 SINGLE_PASS_CHAR_LIMIT = 300_000
 
 INPUT_DIR = Path(__file__).resolve().parent.parent / "output" / "checkpoints"
-OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output" / "cursos_checkpoint"
+OUTPUT_BASE = Path(__file__).resolve().parent.parent / "output"
+
+
+def _projeto_dir(carreira: str, nivel: int) -> Path:
+    """Pasta do projeto: output/<slug>_nivel_<n>/. Usa _slugify definido mais abaixo."""
+    return OUTPUT_BASE / f"{_slugify(carreira)}_nivel_{nivel}"
+
+
+# Global de reforço opcional injetado via --reforco_extra (concatenado ao system prompt).
+REFORCO_EXTRA: str = ""
 
 # Schema novo (etapa 2): resumo por curso é {tema_central, conteudos_testaveis[], ferramentas_usadas[]}.
 # Cada conteudo_testavel: {topico, nivel, tipo, habilidade, evidencia_de_ensino, armadilhas_comuns[]}.
@@ -88,6 +97,10 @@ Regras gerais:
 - Cada enunciado termina com uma pergunta norteadora única, variando entre questões;
 - Título: português corrido, curto (ex.: "Garantindo privacidade na Voll");
 - Linguagem neutra: "pessoa desenvolvedora", "A empresa te contratou". Nunca "Você foi contratado" nem masculino genérico.
+
+# === Proibição de meta-comentários (2026-07) — remover este bloco para voltar ao prompt original ===
+- **Proibição absoluta de meta-comentários (REGRA DURA)**: NÃO escreva observações sobre o próprio texto, regras que você está seguindo, ou o processo de geração. As diretrizes devem estar APLICADAS no texto, NUNCA citadas. Nada de "A linguagem neutra é mantida...", "Conforme as regras...", "Note que preservamos...", "Este exercício foi criado com base em...". O texto deve parecer escrito diretamente para a pessoa aluna, sem NENHUMA pista das diretrizes que o guiaram. Se quiser usar linguagem neutra, USE — não anuncie.
+# === fim proibição meta-comentários ===
 
 Limites de tamanho (CUMPRIR ESTRITAMENTE):
 - Enunciado (contexto + pergunta): 120-180 palavras no total.
@@ -159,6 +172,10 @@ Limites de tamanho (CUMPRIR ESTRITAMENTE):
 - Pergunta norteadora (a última frase do enunciado): 1 frase, ≤30 palavras.
 - Cada alternativa: 1-2 frases, ≤45 palavras.
 - Cada justificativa: 1 frase, ≤30 palavras.
+
+# === Proibição de meta-comentários (2026-07) — remover este bloco para voltar ao prompt original ===
+**Proibição absoluta de meta-comentários (REGRA DURA):** NÃO faça observações sobre o próprio texto, regras que você está seguindo, ou o processo de geração. Nada de "A linguagem neutra é mantida...", "Conforme as regras...", "Note que preservamos fidelidade...". As diretrizes devem estar APLICADAS silenciosamente no texto. Nem no enunciado, nem nas alternativas, nem nas justificativas devem aparecer auto-referências ao processo ou às instruções.
+# === fim proibição meta-comentários ===
 
 **Objetivo:** questão desafiadora, concisa, que avalie compreensão.
 
@@ -329,7 +346,8 @@ def _model_supports_temperature(model: str) -> bool:
     m = (model or "").lower()
     return not (
         m.startswith("gpt-5") or m.startswith("o1") or m.startswith("o3") or m.startswith("o4")
-        or m.startswith("claude-opus-4-7") or m.startswith("claude-opus-5")
+        or m.startswith("claude-opus-4-7") or m.startswith("claude-opus-4-8")
+        or m.startswith("claude-opus-5")
     )
 
 
@@ -840,11 +858,19 @@ def _progress_done():
 # Núcleo: geração de questões — TXT + ranking por dificuldade (mini)
 # =========================
 
+def _apply_reforco(system_prompt: str) -> str:
+    """Concatena o REFORCO_EXTRA (se houver) ao final do system prompt. Usado pelo
+    escape hatch de rerun automático do revisor (etapa 3.5)."""
+    if REFORCO_EXTRA:
+        return f"{system_prompt}\n\n# === REFORÇO INJETADO PELO REVISOR (rerun) ===\n{REFORCO_EXTRA}\n# === fim reforço injetado ==="
+    return system_prompt
+
+
 def _ask_exercise_ideas(client: Any, transcription_text: str, domains_csv: str) -> str:
     return _chat(
         client,
         MODEL_IDEAS,
-        system_prompt_to_ask_for_exercise_ideas(),
+        _apply_reforco(system_prompt_to_ask_for_exercise_ideas()),
         user_prompt_to_ask_for_exercise_ideas_static(),
         user_prompt_to_ask_for_exercise_ideas_dynamic(domains_csv, transcription_text),
         temperature=TEMPERATURE_IDEAS,
@@ -859,7 +885,7 @@ def _to_multiple_choice(client: Any, ex: "ExerciseItem", domains_csv: str) -> st
     return _chat(
         client,
         MODEL_FORMAT,
-        system_prompt_to_transform_into_multiple_choice(),
+        _apply_reforco(system_prompt_to_transform_into_multiple_choice()),
         user_prompt_to_transform_into_multiple_choice_static(),
         user_dynamic,
         temperature=0.0,
@@ -932,7 +958,7 @@ def gerar_prova_teorica(
         for i, (nome, transcription, domains_csv) in enumerate(cursos_prep):
             items.append((
                 f"f1_{i}",
-                system_prompt_to_ask_for_exercise_ideas(),
+                _apply_reforco(system_prompt_to_ask_for_exercise_ideas()),
                 user_prompt_to_ask_for_exercise_ideas_static(),
                 user_prompt_to_ask_for_exercise_ideas_dynamic(domains_csv, transcription),
             ))
@@ -975,7 +1001,7 @@ def gerar_prova_teorica(
         for k, (_c_idx, ex, domains_csv) in enumerate(f2_calls):
             items_f2.append((
                 f"f2_{k}",
-                system_prompt_to_transform_into_multiple_choice(),
+                _apply_reforco(system_prompt_to_transform_into_multiple_choice()),
                 user_prompt_to_transform_into_multiple_choice_static(),
                 user_prompt_to_transform_into_multiple_choice_dynamic(
                     {"titulo": ex.titulo, "pergunta": ex.pergunta, "resposta": ex.resposta},
@@ -1125,7 +1151,8 @@ def main():
     parser = argparse.ArgumentParser(description="Gerar Prova Teórica (Aula 2) — apenas TXT, ranking por dificuldade ascendente e menor custo.")
     parser.add_argument("--nivel", type=int, choices=[1,2,3], required=True)
     parser.add_argument("--carreira", type=str, default="", help="Nome da carreira para compor o nome do arquivo de saída")
-    parser.add_argument("--resumos_arquivo", type=str, required=True, help="Caminho para o JSON de resumos do nível (da carreira).")
+    parser.add_argument("--resumos_arquivo", type=str, default="", help="Caminho para o JSON de resumos. Se omitido, deriva de output/<slug>_nivel_<n>/resumos.json.")
+    parser.add_argument("--reforco_extra", type=str, default="", help="(Interno — usado pelo revisor) Caminho para arquivo com texto de reforço a concatenar ao system prompt.")
     parser.add_argument("--max_questoes", type=int, default=10)
     parser.add_argument("--min_por_curso", type=int, default=1)
     parser.add_argument("--max_por_curso", type=int, default=2)
@@ -1135,6 +1162,15 @@ def main():
     parser.add_argument("--ajustar_alternativas", action="store_true", help="(Opcional) Tenta igualar o tamanho das alternativas — aumenta custo.")
     parser.add_argument("--no-batch", action="store_true", help="Desativa modo batch (Anthropic). Usa execução síncrona — apenas para debug.")
     args = parser.parse_args()
+
+    # Reforço opcional (usado pelo revisor 3.5 no rerun automático)
+    global REFORCO_EXTRA
+    if args.reforco_extra:
+        p = Path(args.reforco_extra)
+        if not p.exists():
+            raise FileNotFoundError(f"Arquivo de reforço não encontrado: {p}")
+        REFORCO_EXTRA = p.read_text(encoding="utf-8").strip()
+        print(f"[Reforço] Injetado a partir de {p} ({len(REFORCO_EXTRA)} chars).")
 
     # Domínios
     if args.domains_arquivo:
@@ -1147,13 +1183,18 @@ def main():
     else:
         domains = DOMAINS_DEFAULT
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    # Path do projeto (nova estrutura output/<slug>_nivel_<n>/)
+    projeto_dir = _projeto_dir(args.carreira, args.nivel)
+    projeto_dir.mkdir(parents=True, exist_ok=True)
+
+    # Deriva resumos_arquivo se não passado
+    resumos_arquivo = args.resumos_arquivo or str(projeto_dir / "resumos.json")
 
     t0 = time.perf_counter()
     txt = gerar_prova_teorica(
         nivel=args.nivel,
         carreira=args.carreira,
-        resumos_arquivo=args.resumos_arquivo,
+        resumos_arquivo=resumos_arquivo,
         domains=domains,
         max_questoes=args.max_questoes,
         min_por_curso=args.min_por_curso,
@@ -1165,9 +1206,7 @@ def main():
     )
     elapsed = time.perf_counter() - t0
 
-    carreira_slug = _slugify(args.carreira)
-    base = f"prova_teorica_{carreira_slug}_nivel_{args.nivel}"
-    out_path = OUTPUT_DIR / f"{base}.txt"
+    out_path = projeto_dir / "prova_teorica.txt"
     out_path.write_text(txt, encoding="utf-8")
     print(f"[OK] TXT salvo em: {out_path}")
 

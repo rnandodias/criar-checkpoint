@@ -34,7 +34,7 @@ if sys.platform == "win32":
 # Configuração
 # =========================
 TEMPERATURE = 0.0
-MODEL = "claude-opus-4-6"
+MODEL = "claude-opus-4-8"
 # Se um vídeo passar desse limite, aplicamos fallback de chunking com overlap leve
 SINGLE_PASS_CHAR_LIMIT = 300000
 CHUNK_SIZE = 180000
@@ -48,7 +48,14 @@ MAX_WORKERS = 4  # paralelismo por curso (ajuste se houver rate limit)
 # MODEL = "gpt-4o-mini"; SINGLE_PASS_CHAR_LIMIT = 14000; CHUNK_SIZE = 10000; CHUNK_OVERLAP = 1000; MAX_WORKERS = 6
 
 INPUT_DIR = Path(__file__).resolve().parent.parent / "trilha"
-OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output" / "checkpoints"
+OUTPUT_BASE = Path(__file__).resolve().parent.parent / "output"
+
+
+def _projeto_dir_from_fname(fname: str) -> Path:
+    """A partir de `<slug>_nivel_<n>.json`, devolve `output/<slug>_nivel_<n>/`.
+    Se o formato não bater, cai num diretório com o basename como pasta."""
+    base = fname[:-5] if fname.endswith(".json") else fname
+    return OUTPUT_BASE / base
 INPUT_FILES = [
     # "analise_de_dados_nivel_1.json",
     # "analise_de_dados_nivel_2.json",
@@ -346,7 +353,8 @@ def _model_supports_temperature(model: str) -> bool:
     m = (model or "").lower()
     return not (
         m.startswith("gpt-5") or m.startswith("o1") or m.startswith("o3") or m.startswith("o4")
-        or m.startswith("claude-opus-4-7") or m.startswith("claude-opus-5")
+        or m.startswith("claude-opus-4-7") or m.startswith("claude-opus-4-8")
+        or m.startswith("claude-opus-5")
     )
 
 
@@ -751,7 +759,6 @@ def main():
     input_files = _resolve_input_files(args)
     batch_mode = not args.no_batch
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     for fname in input_files:
         fpath = INPUT_DIR / fname
         if not fpath.exists():
@@ -759,10 +766,12 @@ def main():
             continue
         print(f"\n=== Processando nível: {fname} (batch={'on' if batch_mode else 'off'}) ===")
         summaries = process_level_file(fpath, batch_mode=batch_mode)
-        out_json = OUTPUT_DIR / f"resumos_{fname}"
+        projeto_dir = _projeto_dir_from_fname(fname)
+        projeto_dir.mkdir(parents=True, exist_ok=True)
+        out_json = projeto_dir / "resumos.json"
         out_json.write_text(json.dumps(summaries, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"[OK] Resumos salvos em: {out_json}")
-        out_jsonl = OUTPUT_DIR / f"resumos_{fname}.jsonl"
+        out_jsonl = projeto_dir / "resumos.jsonl"
         with out_jsonl.open("w", encoding="utf-8") as f:
             for item in summaries:
                 f.write(json.dumps(item, ensure_ascii=False) + "\n")
