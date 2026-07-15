@@ -81,6 +81,9 @@ CARREIRAS_NIVEIS: Dict[str, Dict[int, List[int]]] = {
     "governanca_de_dados": {
         1: [3713, 4631, 4632, 3714, 4633, 3716, 4635, 3717, 5166, 4634],
     },
+    "ia_para_automacao_de_processos": {
+        1: [6306, 4067, 4930, 5226, 5435, 5721, 5355, 5869, 6310],
+    },
 }
 
 

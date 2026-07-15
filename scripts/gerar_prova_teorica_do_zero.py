@@ -550,8 +550,11 @@ def _print_usage_summary() -> None:
     print("=" * 60)
 
 def _slugify(s: str) -> str:
-    s = (s or "").strip().lower()
     import re as _re
+    import unicodedata as _ud
+    s = (s or "").strip().lower()
+    # Desacenta primeiro: "Governança" -> "governanca", "Automação" -> "automacao"
+    s = _ud.normalize("NFKD", s).encode("ascii", "ignore").decode("ascii")
     s = _re.sub(r"[^a-z0-9]+", "_", s)
     return s.strip("_") or "geral"
 

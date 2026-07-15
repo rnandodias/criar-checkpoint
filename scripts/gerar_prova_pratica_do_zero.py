@@ -131,7 +131,10 @@ DOMAINS_DEFAULT = [
 # Utils
 # =========================
 def _slugify(s: str) -> str:
+    import unicodedata as _ud
     s = (s or "").strip().lower()
+    # Desacenta primeiro: "Governança" -> "governanca", "Automação" -> "automacao"
+    s = _ud.normalize("NFKD", s).encode("ascii", "ignore").decode("ascii")
     return re.sub(r"[^a-z0-9]+", "_", s).strip("_") or "geral"
 
 def _slug_or_default(carreira: str) -> str:

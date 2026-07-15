@@ -498,7 +498,10 @@ def criar_atividade_apresentacao(course_id: int, nivel: int = 1, headless: bool 
 
 def _slugify(s: str) -> str:
     """Mesmo slug usado em gerar_prova_teorica_do_zero.py — mantém compat com nome do arquivo."""
+    import unicodedata as _ud
     s = (s or "").strip().lower()
+    # Desacenta primeiro: "Governança" -> "governanca", "Automação" -> "automacao"
+    s = _ud.normalize("NFKD", s).encode("ascii", "ignore").decode("ascii")
     s = re.sub(r"[^a-z0-9]+", "_", s)
     return s.strip("_") or "geral"
 
