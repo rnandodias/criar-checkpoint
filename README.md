@@ -26,7 +26,7 @@ Também funciona 100% na mão, via CLI, para quem preferir.
 ```
 
 - Etapa 1 é chamada HTTP (rápida, ~5s para 8 cursos).
-- Etapas 2, 3, 3.5, 4 e 4.5 usam LLM Anthropic (**Claude Opus 4-8** em tudo, por padrão).
+- Etapas 2, 3, 3.5, 4 e 4.5 usam LLM Anthropic (**Claude Opus 4-6** em tudo, por padrão).
 - Etapa 5 usa Playwright (janela visível por padrão) para automatizar o admin da Alura.
 - Etapas 2 e 3 (fases 1 e 2) usam **Message Batches API** automaticamente quando ≥2 chamadas (50% off).
 - Etapa 4 tem batch **opt-in** via `--batch`.
@@ -113,7 +113,7 @@ python scripts/checkpoint_criar_resumos_cursos.py --carreira <slug> --nivel <n>
 python scripts/gerar_prova_teorica_do_zero.py --nivel <n> --carreira "Nome Oficial" \
   --max_questoes 20 --min_por_curso 1 --max_por_curso 3 --domains_window 3
 
-# 4.5) Revisa a prova teórica e auto-corrige o que der (Opus 4-8; escape hatch se problema sistêmico)
+# 4.5) Revisa a prova teórica e auto-corrige o que der (Opus 4-6; escape hatch se problema sistêmico)
 python scripts/revisar_prova_teorica.py --carreira "Nome Oficial" --nivel <n>
 
 # 5) Gera prova prática (batch opt-in com --batch)

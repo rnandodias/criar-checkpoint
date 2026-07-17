@@ -49,13 +49,13 @@ if sys.platform == "win32":
 # Configuração de modelos
 # =========================
 # Geração crítica (ideias + transformação em múltipla escolha): "cavalo de carga"
-MODEL_IDEAS = "claude-opus-4-8"
-MODEL_FORMAT = "claude-opus-4-8"
+MODEL_IDEAS = "claude-opus-4-6"
+MODEL_FORMAT = "claude-opus-4-6"
 TEMPERATURE_IDEAS = 0.0
 TEMPERATURE_FORMAT = 0.0
 
 # Ranqueamento (apenas dificuldade — não vale gastar): modelo barato
-MODEL_RANK = "claude-opus-4-8"
+MODEL_RANK = "claude-opus-4-6"
 TEMPERATURE_RANK = 0.0
 
 # Alternativas:
@@ -97,10 +97,6 @@ Regras gerais:
 - Cada enunciado termina com uma pergunta norteadora única, variando entre questões;
 - Título: português corrido, curto (ex.: "Garantindo privacidade na Voll");
 - Linguagem neutra: "pessoa desenvolvedora", "A empresa te contratou". Nunca "Você foi contratado" nem masculino genérico.
-
-# === Proibição de meta-comentários (2026-07) — remover este bloco para voltar ao prompt original ===
-- **Proibição absoluta de meta-comentários (REGRA DURA)**: NÃO escreva observações sobre o próprio texto, regras que você está seguindo, ou o processo de geração. As diretrizes devem estar APLICADAS no texto, NUNCA citadas. Nada de "A linguagem neutra é mantida...", "Conforme as regras...", "Note que preservamos...", "Este exercício foi criado com base em...". O texto deve parecer escrito diretamente para a pessoa aluna, sem NENHUMA pista das diretrizes que o guiaram. Se quiser usar linguagem neutra, USE — não anuncie.
-# === fim proibição meta-comentários ===
 
 Limites de tamanho (CUMPRIR ESTRITAMENTE):
 - Enunciado (contexto + pergunta): 120-180 palavras no total.
@@ -172,10 +168,6 @@ Limites de tamanho (CUMPRIR ESTRITAMENTE):
 - Pergunta norteadora (a última frase do enunciado): 1 frase, ≤30 palavras.
 - Cada alternativa: 1-2 frases, ≤45 palavras.
 - Cada justificativa: 1 frase, ≤30 palavras.
-
-# === Proibição de meta-comentários (2026-07) — remover este bloco para voltar ao prompt original ===
-**Proibição absoluta de meta-comentários (REGRA DURA):** NÃO faça observações sobre o próprio texto, regras que você está seguindo, ou o processo de geração. Nada de "A linguagem neutra é mantida...", "Conforme as regras...", "Note que preservamos fidelidade...". As diretrizes devem estar APLICADAS silenciosamente no texto. Nem no enunciado, nem nas alternativas, nem nas justificativas devem aparecer auto-referências ao processo ou às instruções.
-# === fim proibição meta-comentários ===
 
 **Objetivo:** questão desafiadora, concisa, que avalie compreensão.
 

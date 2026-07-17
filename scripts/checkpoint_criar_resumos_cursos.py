@@ -34,7 +34,7 @@ if sys.platform == "win32":
 # Configuração
 # =========================
 TEMPERATURE = 0.0
-MODEL = "claude-opus-4-8"
+MODEL = "claude-opus-4-6"
 # Se um vídeo passar desse limite, aplicamos fallback de chunking com overlap leve
 SINGLE_PASS_CHAR_LIMIT = 300000
 CHUNK_SIZE = 180000

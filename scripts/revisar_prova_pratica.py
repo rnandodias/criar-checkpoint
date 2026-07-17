@@ -5,7 +5,7 @@ Etapa 4.5 — Revisor + auto-correção da prova prática
 scripts/revisar_prova_pratica.py
 
 Depois que `gerar_prova_pratica_do_zero.py` produz o TXT, este script:
-1. Fase A — análise estática (1 chamada Opus 4-8): viabilidade, progressão, cobertura,
+1. Fase A — análise estática (1 chamada Opus 4-6): viabilidade, progressão, cobertura,
    realismo profissional, setup, datasets, sintaxe/coerência, dicas por nível, meta-comentários.
 2. Fase B — teste de resolvedor (1 chamada): "aluno tenta resolver mentalmente" e reporta travamentos.
 3. Fase C — decisão de rota: se ≥3 seções travam por causa da mesma raiz → escape hatch (variante 3);
@@ -50,7 +50,7 @@ from gerar_prova_pratica_do_zero import (  # noqa: E402
 from upload_checkpoint_alura import _parse_prova_pratica, SECOES_PRATICA_ORDER  # noqa: E402
 
 
-MODEL_REVISOR = "claude-opus-4-8"
+MODEL_REVISOR = "claude-opus-4-6"
 TEMPERATURE_REVISOR = 0.0
 
 # Se ≥ este número de seções tiver issues do mesmo tipo raiz, dispara escape hatch.
@@ -77,13 +77,52 @@ def _safe_json_loads(s: str) -> Optional[Any]:
     try:
         return json.loads(s)
     except Exception:
-        # tenta achar { ... } no meio do texto
-        m = re.search(r"\{[\s\S]*\}", s)
-        if m:
-            try:
-                return json.loads(m.group(0))
-            except Exception:
-                return None
+        return None
+
+
+def _parse_json_tolerante(raw: str) -> Optional[Dict[str, Any]]:
+    """Tenta múltiplas estratégias para extrair um objeto JSON válido:
+    1. Parse direto do texto todo.
+    2. Remove crases de markdown (```json ... ```) se houver e tenta de novo.
+    3. Busca a primeira `{` e faz balanceamento de chaves para achar o objeto completo,
+       ignorando `{` e `}` dentro de strings. Retorna dict ou None."""
+    if not raw:
+        return None
+    p = _safe_json_loads(raw.strip())
+    if isinstance(p, dict):
+        return p
+    m = re.search(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", raw)
+    if m:
+        p = _safe_json_loads(m.group(1))
+        if isinstance(p, dict):
+            return p
+    start = raw.find("{")
+    if start < 0:
+        return None
+    depth = 0
+    in_string = False
+    escape = False
+    for j in range(start, len(raw)):
+        c = raw[j]
+        if in_string:
+            if escape:
+                escape = False
+            elif c == "\\":
+                escape = True
+            elif c == '"':
+                in_string = False
+        else:
+            if c == '"':
+                in_string = True
+            elif c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    p = _safe_json_loads(raw[start:j + 1])
+                    if isinstance(p, dict):
+                        return p
+                    break
     return None
 
 
@@ -110,7 +149,12 @@ Dimensões SEMÂNTICAS (podem exigir olhar humano):
 - Realismo profissional: o cenário reflete o dia-a-dia REAL da profissão? Ou é um "trabalhinho acadêmico"?
 - Dicas de troubleshooting: cada etapa tem o mínimo necessário para o nível? Nível 1 pede mais dicas explícitas; Nível 3 tolera menos.
 
-Formato de saída (JSON estrito, sem markdown):
+REGRAS DE SAÍDA (invioláveis):
+1. Sua resposta INTEIRA deve ser UM ÚNICO objeto JSON válido. NADA fora do JSON — nem texto explicativo, nem crases de markdown, nem "```json".
+2. Primeiro caractere: `{`. Último caractere: `}`.
+3. Se a prova estiver íntegra, retorne exatamente: {"issues": []}
+
+Schema:
 {
   "issues": [
     {
@@ -124,8 +168,6 @@ Formato de saída (JSON estrito, sem markdown):
     }
   ]
 }
-
-Se a prova estiver íntegra, retorne {"issues": []}.
 """
 
 
@@ -162,7 +204,12 @@ Sua saída deve ser um relatório honesto do que aconteceria se você tentasse f
 
 Não tente esconder dificuldades. Você é uma pessoa aluna real, não um especialista. Se tudo estiver claro, diga.
 
-Formato de saída (JSON estrito, sem markdown):
+REGRAS DE SAÍDA (invioláveis):
+1. Sua resposta INTEIRA deve ser UM ÚNICO objeto JSON válido. NADA fora do JSON.
+2. Primeiro caractere: `{`. Último caractere: `}`.
+3. Se você resolveria tudo tranquilamente, retorne exatamente: {"travamentos": []}
+
+Schema:
 {
   "travamentos": [
     {
@@ -172,8 +219,6 @@ Formato de saída (JSON estrito, sem markdown):
     }
   ]
 }
-
-Se você resolveria tudo tranquilamente, retorne {"travamentos": []}.
 """
 
 
@@ -412,6 +457,7 @@ def main():
     parser.add_argument("--modo_dados", type=str, choices=["auto", "com", "sem"], default="auto")
     parser.add_argument("--batch", action="store_true", help="Passar --batch para o rerun (se disparar).")
     parser.add_argument("--pular-revisao", action="store_true")
+    parser.add_argument("--escape-hatch", action="store_true", help="Habilita rerun automático (variante 3). DESLIGADO POR PADRÃO — sem esta flag, só reporta padrão sistêmico e para.")
     parser.add_argument("--nested", action="store_true")
     args = parser.parse_args()
 
@@ -461,7 +507,7 @@ def main():
         user_prompt_revisor_estatico(txt, resumos_json, ferramentas, args.nivel, args.carreira, perfil, envolve_dados),
         temperature=TEMPERATURE_REVISOR,
     )
-    analise = _safe_json_loads(raw_a) or {"issues": []}
+    analise = _parse_json_tolerante(raw_a) or {"issues": []}
     if not isinstance(analise, dict):
         analise = {"issues": []}
     analise.setdefault("issues", [])
@@ -480,7 +526,7 @@ def main():
         user_prompt_resolvedor(txt, cursos_nomes, args.nivel, args.carreira),
         temperature=TEMPERATURE_REVISOR,
     )
-    resolvedor = _safe_json_loads(raw_b) or {"travamentos": []}
+    resolvedor = _parse_json_tolerante(raw_b) or {"travamentos": []}
     if not isinstance(resolvedor, dict):
         resolvedor = {"travamentos": []}
     resolvedor.setdefault("travamentos", [])
@@ -512,39 +558,43 @@ def main():
 
     if padrao_sistemico and not args.nested:
         print(f"[Revisor] Padrão sistêmico: '{padrao_sistemico}' em {len(secoes_do_padrao)} seções ≥ limiar.")
-        reforco = gerar_reforco_para_padrao(padrao_sistemico, secoes_do_padrao)
-        backup_path = projeto_dir / "prova_pratica.pre_revisao.txt"
-        backup_path.write_text(txt, encoding="utf-8")
-        ok = rerodar_etapa_4(
-            projeto_dir=projeto_dir,
-            carreira=args.carreira,
-            nivel=args.nivel,
-            resumos_arquivo=resumos_arquivo,
-            modo_dados=args.modo_dados,
-            usar_batch=args.batch,
-            reforco_texto=reforco,
-        )
-        rerun_disparado = ok
-        if ok:
-            # Chama a si mesmo em --nested para revisar o novo TXT sem novo escape hatch
-            nested_cmd = [
-                sys.executable, str(_SCRIPT_DIR / "revisar_prova_pratica.py"),
-                "--carreira", args.carreira,
-                "--nivel", str(args.nivel),
-                "--resumos_arquivo", resumos_arquivo,
-                "--modo_dados", args.modo_dados,
-                "--nested",
-            ]
-            if args.batch:
-                nested_cmd.append("--batch")
-            print("[Revisor] Rerun OK. Revisando o TXT novo em modo --nested...")
-            try:
-                subprocess.run(nested_cmd, check=True)
-            except subprocess.CalledProcessError as e:
-                print(f"[Revisor] Revisão nested falhou: {e}")
-            return
+        if not args.escape_hatch:
+            print(f"[Revisor] --escape-hatch NÃO passado; NÃO vou disparar rerun automático. Padrão sistêmico será reportado no relatório. Para forçar rerun, rode novamente com --escape-hatch.")
+            padrao_sistemico = None  # Neutraliza — mas registra no relatório final
         else:
-            print("[Revisor] Rerun falhou — caindo em modo relatório manual.")
+            reforco = gerar_reforco_para_padrao(padrao_sistemico, secoes_do_padrao)
+            backup_path = projeto_dir / "prova_pratica.pre_revisao.txt"
+            backup_path.write_text(txt, encoding="utf-8")
+            ok = rerodar_etapa_4(
+                projeto_dir=projeto_dir,
+                carreira=args.carreira,
+                nivel=args.nivel,
+                resumos_arquivo=resumos_arquivo,
+                modo_dados=args.modo_dados,
+                usar_batch=args.batch,
+                reforco_texto=reforco,
+            )
+            rerun_disparado = ok
+            if ok:
+                # Chama a si mesmo em --nested para revisar o novo TXT sem novo escape hatch
+                nested_cmd = [
+                    sys.executable, str(_SCRIPT_DIR / "revisar_prova_pratica.py"),
+                    "--carreira", args.carreira,
+                    "--nivel", str(args.nivel),
+                    "--resumos_arquivo", resumos_arquivo,
+                    "--modo_dados", args.modo_dados,
+                    "--nested",
+                ]
+                if args.batch:
+                    nested_cmd.append("--batch")
+                print("[Revisor] Rerun OK. Revisando o TXT novo em modo --nested...")
+                try:
+                    subprocess.run(nested_cmd, check=True)
+                except subprocess.CalledProcessError as e:
+                    print(f"[Revisor] Revisão nested falhou: {e}")
+                return
+            else:
+                print("[Revisor] Rerun falhou — caindo em modo relatório manual.")
 
     # Fase D — auto-correção por seção
     # Agrupa issues por seção

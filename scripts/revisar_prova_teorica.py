@@ -5,7 +5,7 @@ Etapa 3.5 — Revisor + auto-correção da prova teórica
 scripts/revisar_prova_teorica.py
 
 Depois que `gerar_prova_teorica_do_zero.py` produz o TXT, este script:
-1. Analisa cada exercício em batch (Opus 4-8) contra dimensões objetivas + semânticas.
+1. Analisa cada exercício em batch (Opus 4-6) contra dimensões objetivas + semânticas.
 2. Se ≥50% dos exercícios têm issues da mesma categoria → escape hatch (variante 3):
    gera um reforço específico e re-roda `gerar_prova_teorica_do_zero.py` com --reforco_extra.
 3. Senão → auto-corrige exercício a exercício (variante 2).
@@ -50,11 +50,23 @@ from gerar_prova_teorica_do_zero import (  # noqa: E402
 from upload_checkpoint_alura import _parse_prova_teorica  # noqa: E402
 
 
-MODEL_REVISOR = "claude-opus-4-8"
+MODEL_REVISOR = "claude-opus-4-6"
 TEMPERATURE_REVISOR = 0.0
 
 # Limite mínimo (proporção do total) para considerar um padrão como "sistêmico".
 LIMIAR_SISTEMICO = 0.5
+
+# Só considera categorias de tamanho como "sistêmicas" (para disparar escape hatch quando
+# ativado com --escape-hatch) se os valores realmente ficarem fora de limites GENEROSOS.
+# Baseado em dados históricos: nenhum checkpoint aprovado teve enunciados dentro de
+# 120-180 palavras, mas nenhum ficou abaixo de 60. Alternativas e justificativas: o critério
+# é utilidade pedagógica, não tamanho — só marcamos como sistêmico se forem quase inexistentes
+# (≤3 palavras) ou absurdamente longas (>90 palavras).
+LIMIAR_TAMANHO_MIN_ENUNCIADO = 60
+LIMIAR_TAMANHO_MIN_ALTERNATIVA = 3   # abaixo disso a alternativa não ensina nada
+LIMIAR_TAMANHO_MAX_ALTERNATIVA = 90  # acima disso vira ensaio verbose
+LIMIAR_TAMANHO_MIN_JUSTIFICATIVA = 3
+LIMIAR_TAMANHO_MAX_JUSTIFICATIVA = 60
 
 # Categorias possíveis retornadas pelo revisor. Usadas para agrupar issues e detectar padrão sistêmico.
 CATEGORIAS_VALIDAS = {
@@ -80,10 +92,10 @@ def system_prompt_revisor() -> str:
 
 Sua tarefa: analisar UM exercício de múltipla escolha e reportar problemas em formato JSON estruturado.
 
-Dimensões OBJETIVAS (mecânicas — fáceis de auto-corrigir):
-- Enunciado (contexto + pergunta norteadora) deve ter entre 120 e 180 palavras. Muito curto = perde contexto; muito longo = cansa.
-- Cada alternativa deve ter ≤ 45 palavras.
-- Cada justificativa deve ter ≤ 30 palavras.
+Dimensões OBJETIVAS (mecânicas — geralmente auto-corrigíveis):
+- Enunciado (contexto + pergunta norteadora): só é problema real se ficar ABAIXO de 60 palavras (contexto insuficiente pro aluno). A faixa ideal é 80-150, mas 60-200 é aceitável.
+- Alternativas: o critério é UTILIDADE PEDAGÓGICA, não tamanho absoluto. Alternativa curta (~10 palavras) pode ser ótima; alternativa longa (~60 palavras) pode ser ótima se for útil pro aprendizado. Só marque como issue se a alternativa não ensinar nada ou for tão longa que confunda.
+- Justificativas: mesmo critério — utilidade pedagógica manda. Marque só se a justificativa não explica ou for tão longa que perde o foco.
 - Linguagem neutra literal: "pessoa desenvolvedora", "A empresa te contratou". PROIBIDOS: "Você foi contratado", masculino genérico ("o desenvolvedor", "o usuário").
 - Ausência de meta-comentários: o texto NÃO pode conter frases sobre o próprio texto (ex: "A linguagem neutra é mantida...", "Conforme as regras..."). As diretrizes ficam aplicadas, nunca citadas.
 
@@ -94,7 +106,13 @@ Dimensões SEMÂNTICAS (podem exigir olhar humano):
 - O exercício adere ao resumo do curso citado? Ou inventa conceitos que não foram ensinados?
 - O nível da carreira está adequado? Nível 1 = mais explícito, contexto rico; Nível 3 = expectativa profissional, denso.
 
-Formato de saída (JSON estrito, sem markdown, sem comentários):
+REGRAS DE SAÍDA (invioláveis):
+1. Sua resposta INTEIRA deve ser UM ÚNICO objeto JSON válido. NADA fora do JSON — nem texto explicativo antes, nem comentários depois, nem crases de markdown envolvendo, nem "```json".
+2. Sua primeira caractere deve ser `{` e a última `}`.
+3. NÃO use comentários JSON (que não existem). NÃO use vírgulas soltas. NÃO use aspas curvas.
+4. Se o exercício estiver íntegro, retorne exatamente: {"exercicio_n": N, "issues": []}
+
+Schema do JSON:
 {
   "exercicio_n": <número do exercício>,
   "issues": [
@@ -108,8 +126,6 @@ Formato de saída (JSON estrito, sem markdown, sem comentários):
     }
   ]
 }
-
-Se o exercício estiver íntegro, retorne {"exercicio_n": N, "issues": []}.
 """
 
 
@@ -126,7 +142,7 @@ RESUMO DO CURSO CITADO (fonte da verdade para checar aderência):
 {resumo_curso}
 ```
 
-Retorne SOMENTE o JSON no formato especificado. Nada mais.
+Retorne SOMENTE o objeto JSON. Comece com {{ e termine com }}. NADA mais.
 """
 
 
@@ -200,11 +216,7 @@ def analisar_em_batch(
     analises: List[Dict[str, Any]] = []
     for i in range(len(blocos)):
         raw = respostas.get(f"rev_{i}", "")
-        parsed = _safe_json_loads(raw)
-        if not parsed or not isinstance(parsed, dict):
-            # tenta extrair JSON do meio do texto
-            m = re.search(r"\{[\s\S]*\}", raw)
-            parsed = _safe_json_loads(m.group(0)) if m else None
+        parsed = _parse_json_tolerante(raw)
         if not parsed or not isinstance(parsed, dict):
             print(f"  [AVISO] Análise do exercício {i+1} não retornou JSON válido — marcando sem issues.")
             parsed = {"exercicio_n": i + 1, "issues": []}
@@ -218,13 +230,66 @@ def analisar_em_batch(
     return analises
 
 
+def _parse_json_tolerante(raw: str) -> Optional[Dict[str, Any]]:
+    """Tenta múltiplas estratégias para extrair um objeto JSON válido:
+    1. Parse direto do texto todo.
+    2. Remove crases de markdown (```json ... ```) se houver e tenta de novo.
+    3. Busca a primeira `{` e faz balanceamento de chaves para achar o objeto completo,
+       ignorando `{` e `}` dentro de strings.
+    Retorna dict ou None."""
+    if not raw:
+        return None
+    # 1) Direto
+    p = _safe_json_loads(raw.strip())
+    if isinstance(p, dict):
+        return p
+    # 2) Remove crases de markdown
+    m = re.search(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", raw)
+    if m:
+        p = _safe_json_loads(m.group(1))
+        if isinstance(p, dict):
+            return p
+    # 3) Balanceamento manual
+    start = raw.find("{")
+    if start < 0:
+        return None
+    depth = 0
+    in_string = False
+    escape = False
+    for j in range(start, len(raw)):
+        c = raw[j]
+        if in_string:
+            if escape:
+                escape = False
+            elif c == "\\":
+                escape = True
+            elif c == '"':
+                in_string = False
+        else:
+            if c == '"':
+                in_string = True
+            elif c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    p = _safe_json_loads(raw[start:j + 1])
+                    if isinstance(p, dict):
+                        return p
+                    break
+    return None
+
+
 # =========================
 # Detecção de padrão sistêmico + geração de reforço
 # =========================
 
-def detectar_padrao_sistemico(analises: List[Dict[str, Any]]) -> Optional[str]:
+def detectar_padrao_sistemico(analises: List[Dict[str, Any]], blocos: Optional[List[str]] = None) -> Optional[str]:
     """Retorna a categoria dominante se ≥LIMIAR_SISTEMICO dos exercícios tiverem issue dessa categoria.
-    Senão None."""
+    Para a categoria 'tamanho_enunciado', aplica um filtro extra: só considera sistêmico
+    se ≥LIMIAR_SISTEMICO dos enunciados tiverem MENOS que LIMIAR_TAMANHO_MIN_ENUNCIADO palavras
+    (evita escape hatch por 'ficou abaixo de 120 palavras' quando o histórico aprovado
+    também ficou nessa faixa). Senão None."""
     total = len(analises)
     if total == 0:
         return None
@@ -236,9 +301,58 @@ def detectar_padrao_sistemico(analises: List[Dict[str, Any]]) -> Optional[str]:
     if not contagem:
         return None
     cat_top, count_top = max(contagem.items(), key=lambda kv: kv[1])
-    if count_top / total >= LIMIAR_SISTEMICO:
-        return cat_top
-    return None
+    if count_top / total < LIMIAR_SISTEMICO:
+        return None
+    # Filtros extras para categorias de tamanho: só é problema real quando as métricas
+    # reais (contadas no TXT) violam limites GENEROSOS. Evita escape hatch por regra rígida
+    # do prompt que os modelos nunca cumprem na íntegra e o coordenador não considera problema.
+    if blocos is not None:
+        import re as _re
+        if cat_top == "tamanho_enunciado":
+            curtos = 0
+            for b in blocos:
+                m = _re.search(r"Pergunta:\s*(.*?)\n\s*A\)", b, _re.DOTALL)
+                if m and len(m.group(1).split()) < LIMIAR_TAMANHO_MIN_ENUNCIADO:
+                    curtos += 1
+            if curtos / total < LIMIAR_SISTEMICO:
+                print(f"[Padrão sistêmico] Categoria 'tamanho_enunciado' marcada em {count_top}/{total} pelo LLM, "
+                      f"mas só {curtos}/{total} enunciados têm < {LIMIAR_TAMANHO_MIN_ENUNCIADO} palavras. "
+                      f"Escape hatch NÃO disparado.")
+                return None
+        elif cat_top == "tamanho_alternativa":
+            # Conta exercícios com PELO MENOS uma alternativa fora dos limites generosos
+            fora = 0
+            for b in blocos:
+                for letra in ["A", "B", "C", "D"]:
+                    prox = "BCD"["ABC".index(letra)] if letra in "ABC" else None
+                    stop = rf"\n{prox}\)" if prox else r"\Z"
+                    m = _re.search(rf"\n{letra}\)\s*(?P<t>.*?)\n\s*Justificativa:", b, _re.DOTALL)
+                    if m:
+                        n = len(m.group("t").split())
+                        if n < LIMIAR_TAMANHO_MIN_ALTERNATIVA or n > LIMIAR_TAMANHO_MAX_ALTERNATIVA:
+                            fora += 1
+                            break
+            if fora / total < LIMIAR_SISTEMICO:
+                print(f"[Padrão sistêmico] Categoria 'tamanho_alternativa' marcada em {count_top}/{total} pelo LLM, "
+                      f"mas só {fora}/{total} exercícios têm alternativas fora de "
+                      f"{LIMIAR_TAMANHO_MIN_ALTERNATIVA}-{LIMIAR_TAMANHO_MAX_ALTERNATIVA} palavras. "
+                      f"Escape hatch NÃO disparado.")
+                return None
+        elif cat_top == "tamanho_justificativa":
+            fora = 0
+            for b in blocos:
+                for m in _re.finditer(r"Justificativa:\s*(.*?)(?=\n[ABCD]\)|\Z)", b, _re.DOTALL):
+                    n = len(m.group(1).split())
+                    if n < LIMIAR_TAMANHO_MIN_JUSTIFICATIVA or n > LIMIAR_TAMANHO_MAX_JUSTIFICATIVA:
+                        fora += 1
+                        break
+            if fora / total < LIMIAR_SISTEMICO:
+                print(f"[Padrão sistêmico] Categoria 'tamanho_justificativa' marcada em {count_top}/{total} pelo LLM, "
+                      f"mas só {fora}/{total} exercícios têm justificativas fora de "
+                      f"{LIMIAR_TAMANHO_MIN_JUSTIFICATIVA}-{LIMIAR_TAMANHO_MAX_JUSTIFICATIVA} palavras. "
+                      f"Escape hatch NÃO disparado.")
+                return None
+    return cat_top
 
 
 REFORCOS_POR_CATEGORIA = {
@@ -492,6 +606,7 @@ def main():
     parser.add_argument("--max_por_curso", type=int, default=3)
     parser.add_argument("--domains_window", type=int, default=3)
     parser.add_argument("--pular-revisao", action="store_true", help="Opt-out global: só copia backup e sai.")
+    parser.add_argument("--escape-hatch", action="store_true", help="Habilita rerun automático (variante 3) quando padrão sistêmico. DESLIGADO POR PADRÃO — sem esta flag, o revisor só reporta padrão sistêmico e para (nunca dispara subprocess do gerador).")
     parser.add_argument("--nested", action="store_true", help="(Interno) Marca este run como nested — bloqueia novo escape hatch.")
     args = parser.parse_args()
 
@@ -527,50 +642,55 @@ def main():
     # Fase B — decisão de rota
     total_issues = sum(len(a["issues"]) for a in analises)
     print(f"[Revisor] Issues encontradas: {total_issues}")
-    padrao = detectar_padrao_sistemico(analises)
+    padrao = detectar_padrao_sistemico(analises, blocos=blocos)
     rerun_disparado = False
 
     if padrao and not args.nested:
         contagem = sum(1 for a in analises if any(i.get("categoria") == padrao for i in a["issues"]))
         print(f"[Revisor] Padrão sistêmico: '{padrao}' em {contagem}/{len(analises)} exercícios ≥ limiar.")
-        reforco = gerar_reforco_para_padrao(padrao, contagem, len(analises))
-        # Backup antes do rerun
-        backup_path = projeto_dir / "prova_teorica.pre_revisao.txt"
-        backup_path.write_text(txt, encoding="utf-8")
-        # Dispara rerun (que reescreve prova_teorica.txt)
-        ok = rerodar_etapa_3(
-            projeto_dir=projeto_dir,
-            carreira=args.carreira,
-            nivel=args.nivel,
-            resumos_arquivo=resumos_arquivo,
-            max_questoes=args.max_questoes,
-            min_por_curso=args.min_por_curso,
-            max_por_curso=args.max_por_curso,
-            domains_window=args.domains_window,
-            reforco_texto=reforco,
-        )
-        rerun_disparado = ok
-        if ok:
-            # Chama a si mesmo com --nested (para revisar o novo TXT sem outro escape hatch)
-            nested_cmd = [
-                sys.executable, str(_SCRIPT_DIR / "revisar_prova_teorica.py"),
-                "--carreira", args.carreira,
-                "--nivel", str(args.nivel),
-                "--resumos_arquivo", resumos_arquivo,
-                "--max_questoes", str(args.max_questoes),
-                "--min_por_curso", str(args.min_por_curso),
-                "--max_por_curso", str(args.max_por_curso),
-                "--domains_window", str(args.domains_window),
-                "--nested",
-            ]
-            print("[Revisor] Rerun OK. Revisando o TXT novo em modo --nested...")
-            try:
-                subprocess.run(nested_cmd, check=True)
-            except subprocess.CalledProcessError as e:
-                print(f"[Revisor] Revisão nested falhou: {e}")
-            return
+        if not args.escape_hatch:
+            print(f"[Revisor] --escape-hatch NÃO passado; NÃO vou disparar rerun automático. O padrão sistêmico será apenas reportado no relatório final. Para forçar rerun automático, rode novamente com --escape-hatch.")
+            # Segue para Fase C (auto-correção individual) normalmente.
+            padrao = None  # Neutraliza o padrão para não engatilhar rerun mais adiante
         else:
-            print("[Revisor] Rerun falhou — caindo em modo relatório manual.")
+            reforco = gerar_reforco_para_padrao(padrao, contagem, len(analises))
+            # Backup antes do rerun
+            backup_path = projeto_dir / "prova_teorica.pre_revisao.txt"
+            backup_path.write_text(txt, encoding="utf-8")
+            # Dispara rerun (que reescreve prova_teorica.txt)
+            ok = rerodar_etapa_3(
+                projeto_dir=projeto_dir,
+                carreira=args.carreira,
+                nivel=args.nivel,
+                resumos_arquivo=resumos_arquivo,
+                max_questoes=args.max_questoes,
+                min_por_curso=args.min_por_curso,
+                max_por_curso=args.max_por_curso,
+                domains_window=args.domains_window,
+                reforco_texto=reforco,
+            )
+            rerun_disparado = ok
+            if ok:
+                # Chama a si mesmo com --nested (para revisar o novo TXT sem outro escape hatch)
+                nested_cmd = [
+                    sys.executable, str(_SCRIPT_DIR / "revisar_prova_teorica.py"),
+                    "--carreira", args.carreira,
+                    "--nivel", str(args.nivel),
+                    "--resumos_arquivo", resumos_arquivo,
+                    "--max_questoes", str(args.max_questoes),
+                    "--min_por_curso", str(args.min_por_curso),
+                    "--max_por_curso", str(args.max_por_curso),
+                    "--domains_window", str(args.domains_window),
+                    "--nested",
+                ]
+                print("[Revisor] Rerun OK. Revisando o TXT novo em modo --nested...")
+                try:
+                    subprocess.run(nested_cmd, check=True)
+                except subprocess.CalledProcessError as e:
+                    print(f"[Revisor] Revisão nested falhou: {e}")
+                return
+            else:
+                print("[Revisor] Rerun falhou — caindo em modo relatório manual.")
 
     # Fase C — auto-correção individual
     correcoes: Dict[int, str] = {}

@@ -59,7 +59,7 @@ if sys.platform == "win32":
 # Config de modelos
 # =========================
 # Geração da prova prática: top de linha (segue restrições rigorosas de escopo)
-MODEL_GEN = "claude-opus-4-8"
+MODEL_GEN = "claude-opus-4-6"
 TEMP = 0.0
 
 # Alternativas:
