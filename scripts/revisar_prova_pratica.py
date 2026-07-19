@@ -286,9 +286,7 @@ Reescreva SOMENTE o conteúdo desta seção. Não inclua o header `## ...` — e
             None,
             MODEL_REVISOR,
             SYSTEM_PROMPT_CORRETOR_SECAO,
-            "",
             user_prompt,
-            temperature=TEMPERATURE_REVISOR,
         )
     except Exception as e:
         print(f"  [ERRO] Correção da seção '{header}' falhou: {type(e).__name__}: {e}")
@@ -503,9 +501,7 @@ def main():
         None,
         MODEL_REVISOR,
         system_prompt_revisor_estatico(),
-        "",
         user_prompt_revisor_estatico(txt, resumos_json, ferramentas, args.nivel, args.carreira, perfil, envolve_dados),
-        temperature=TEMPERATURE_REVISOR,
     )
     analise = _parse_json_tolerante(raw_a) or {"issues": []}
     if not isinstance(analise, dict):
@@ -522,9 +518,7 @@ def main():
         None,
         MODEL_REVISOR,
         system_prompt_resolvedor(),
-        "",
         user_prompt_resolvedor(txt, cursos_nomes, args.nivel, args.carreira),
-        temperature=TEMPERATURE_REVISOR,
     )
     resolvedor = _parse_json_tolerante(raw_b) or {"travamentos": []}
     if not isinstance(resolvedor, dict):

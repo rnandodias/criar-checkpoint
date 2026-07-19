@@ -8,7 +8,7 @@ Pipeline para **gerar atividades de Checkpoint** (prova teórica e prova prátic
 
 Este projeto foi extraído/isolado a partir de dois projetos maiores do usuário (`Tarefas` e `scraping_formações`), trazendo **somente** o que diz respeito à geração das provas de checkpoint. Os dois projetos originais permanecem intactos como referência.
 
-## Pipeline (5 etapas principais + 2 revisões automáticas)
+## Pipeline (5 etapas principais + 2 revisões automáticas + 1 handoff pré-publicação)
 
 ```text
 1)   obter_transcricoes_cursos.py     →  trilha/<carreira>_nivel_<n>.json         (API Alura de cursos)
@@ -17,8 +17,11 @@ Este projeto foi extraído/isolado a partir de dois projetos maiores do usuário
 3.5) revisar_prova_teorica.py          → sobrescreve prova_teorica.txt + backup .pre_revisao.txt + relatorio.md
 4)   gerar_prova_pratica_do_zero.py    → output/<slug>_nivel_<n>/prova_pratica.txt
 4.5) revisar_prova_pratica.py          → sobrescreve prova_pratica.txt + backup .pre_revisao.txt + relatorio.md
+4.9) empacotar_para_coordenador.py     → instrucoes_coordenador.txt + revisao_coordenador_*.zip (handoff, sem LLM)
 5)   upload_checkpoint_alura.py        → publica seções/atividades no admin Alura (Playwright)
 ```
+
+A etapa **4.9** é o handoff pré-publicação: gera um documento de instruções para o coordenador (folha de seleção das 10 questões teóricas + pendências da prática extraídas dos relatórios de QA) e empacota provas + relatórios num ZIP. É determinística (não usa LLM); roda depois do QA e antes do upload. O coordenador revisa/aprova o ZIP e só então roda-se a Etapa 5.
 
 Cada script consome a saída do anterior. Os resumos são a **fonte única de verdade** para a geração das provas — nenhuma etapa posterior lê as transcrições diretamente.
 
@@ -56,6 +59,7 @@ scripts/
 ├── revisar_prova_teorica.py               # 3.5) QA + auto-correção (variantes 2 e 3 automáticas)
 ├── gerar_prova_pratica_do_zero.py         # 4) Aula 3 (TXT estruturado)
 ├── revisar_prova_pratica.py               # 4.5) QA + teste de resolvedor + auto-correção
+├── empacotar_para_coordenador.py          # 4.9) handoff: instruções + ZIP p/ revisão do coordenador (sem LLM)
 └── upload_checkpoint_alura.py             # 5) publica no admin Alura (Playwright)
 trilha/            # entrada: transcrições
 output/
@@ -68,7 +72,9 @@ output/
     ├── prova_pratica.txt                  #   etapa 4 (sobrescrito pela 4.5)
     ├── prova_pratica.pre_revisao.txt      #   4.5 backup
     ├── prova_pratica_relatorio.md         #   4.5 saída
-    └── _reforco_*.txt                     #   gerado pelo escape hatch (variante 3) — pode apagar após rerun
+    ├── _reforco_*.txt                     #   gerado pelo escape hatch (variante 3) — pode apagar após rerun
+    ├── instrucoes_coordenador.txt         #   4.9 folha de decisão do coordenador
+    └── revisao_coordenador_<slug>_nivel_<n>.zip  #   4.9 pacote (instruções + provas + relatórios)
 ```
 
 ## Comandos úteis
@@ -86,6 +92,8 @@ python scripts/gerar_prova_teorica_do_zero.py --nivel 1 --carreira "Governança 
 python scripts/revisar_prova_teorica.py --carreira "Governança de Dados" --nivel 1
 python scripts/gerar_prova_pratica_do_zero.py --nivel 1 --carreira "Governança de Dados" --batch
 python scripts/revisar_prova_pratica.py --carreira "Governança de Dados" --nivel 1
+# Handoff pré-publicação: gera instrucoes_coordenador.txt + ZIP para revisão do coordenador
+python scripts/empacotar_para_coordenador.py --carreira "Governança de Dados" --nivel 1
 
 # Publicação no admin Alura (precisa do <curso_id> do checkpoint na URL /admin/courses/v2/<id>)
 python scripts/upload_checkpoint_alura.py --curso_id 5256 --etapa criar_secoes
