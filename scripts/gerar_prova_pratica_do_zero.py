@@ -625,18 +625,35 @@ def _extend_or_trim_csv(csv_text: str) -> str:
             data.append(row)
         return _to_csv(header, data)
     seed_n = len(data)
+    # Colunas-chave: valores todos distintos nos dados originais (provável id/código).
+    # Ao ampliar, DUPLICAMOS linhas inteiras (preservando a correlação entre colunas —
+    # essencial p/ tabelas de referência) e variamos APENAS as colunas-chave, para não
+    # criar duplicatas de chave. Sintetizar cada coluna de forma independente (como antes)
+    # embaralhava os campos e corrompia datasets de referência.
+    uniq_cols = set()
+    for col_i in range(len(header)):
+        vals = [(r[col_i].strip() if col_i < len(r) and r[col_i] else "") for r in data]
+        nonempty = [v for v in vals if v]
+        if nonempty and len(set(nonempty)) == len(nonempty):
+            uniq_cols.add(col_i)
+    if not uniq_cols:
+        # Sem coluna-chave: duplicar linhas só geraria duplicatas exatas (ex.: tabela de
+        # referência pequena). Melhor manter o dataset coerente, ainda que < MIN_ROWS,
+        # do que inflá-lo com redundância ou incoerência.
+        return _to_csv(header, data)
     for r_idx in range(seed_n, MIN_ROWS):
         base = data[r_idx % seed_n]
         row = []
         for col_i, t in enumerate(types):
             base_val = base[col_i] if col_i < len(base) else ""
-            rng = ranges.get(col_i)
-            cats = cats_by_col.get(col_i, [])
-            if t in ("int", "float", "date", "cat"):
-                row.append(_synthesize_value(t, rng, cats, base_texts[col_i], r_idx))
+            if col_i in uniq_cols:
+                if t in ("int", "float", "date"):
+                    row.append(_synthesize_value(t, ranges.get(col_i), [], base_texts[col_i], r_idx))
+                else:
+                    base_clean = (base_val or "").strip() or base_texts[col_i] or "valor"
+                    row.append(f"{base_clean}_{r_idx}")
             else:
-                base_clean = (base_val or "").strip() or base_texts[col_i] or "valor"
-                row.append(f"{base_clean}_{r_idx}")
+                row.append(base_val)  # copia da linha base → preserva correlação entre colunas
         data.append(row)
     return _to_csv(header, data[:MAX_ROWS])
 
@@ -671,10 +688,22 @@ def _extend_or_trim_json_records(json_text: str) -> str:
             elif vals and len({v for v in vals if v is not None}) <= 15:
                 t = "cat"
             types[k] = t
+        # Chaves com valores todos distintos = provável id. Ao ampliar, COPIAMOS o objeto
+        # base inteiro (preserva correlação entre campos) e variamos só as chaves-id.
+        uniq_keys = set()
+        for k in keys:
+            vals = [o.get(k) for o in arr if k in o and o.get(k) is not None]
+            if vals and len({str(v) for v in vals}) == len(vals):
+                uniq_keys.add(k)
+        if not uniq_keys:
+            # Sem chave-id: manter coerente (ainda que < MIN_ROWS) em vez de recombinar campos.
+            return json.dumps(arr[:MAX_ROWS], ensure_ascii=False)
+        seed = list(arr)
         while len(arr) < MIN_ROWS:
             i = len(arr)
-            new_obj: Dict[str, Any] = {}
-            for k in keys:
+            base = seed[i % len(seed)]
+            new_obj: Dict[str, Any] = dict(base)  # copia → preserva correlação
+            for k in uniq_keys:
                 t = types.get(k, "text")
                 if t == "int":
                     new_obj[k] = random.randint(0, 1000)
@@ -682,11 +711,8 @@ def _extend_or_trim_json_records(json_text: str) -> str:
                     new_obj[k] = round(random.uniform(0, 1000), 2)
                 elif t == "date":
                     new_obj[k] = (datetime(2023, 1, 1) + timedelta(days=i)).strftime("%Y-%m-%d")
-                elif t == "cat":
-                    cats = list({o.get(k) for o in arr if k in o})
-                    new_obj[k] = random.choice(cats) if cats else f"cat_{i%7}"
                 else:
-                    new_obj[k] = f"{k}_{i}"
+                    new_obj[k] = f"{base.get(k, k)}_{i}"
             arr.append(new_obj)
         return json.dumps(arr[:MAX_ROWS], ensure_ascii=False)
     except Exception as e:
