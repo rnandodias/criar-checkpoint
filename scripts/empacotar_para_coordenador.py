@@ -177,11 +177,14 @@ def montar_instrucoes(carreira: str, nivel: int, base: Path) -> str:
         for e in etapas:
             L.append(f"    - {e}")
     L.append(
-        "- NÃO altere a estrutura/marcações do arquivo: os cabeçalhos (#, ##) e os blocos\n"
+        "- Você PODE editar o corpo do texto diretamente no arquivo — enunciados, dicas,\n"
+        "  descrições e os dados (blocos CSV) — para corrigir o que precisar.\n"
+        "- NÃO altere as marcações estruturais: os cabeçalhos (#, ##) e os blocos\n"
         "  **Pergunta-chave:**, **Sua missão:**, **Ferramentas:** e a matriz de cobertura\n"
         "  são pontos de corte usados na importação para a plataforma — mexer neles quebra\n"
-        "  o upload. Se identificar uma correção de conteúdo, aponte-a à parte; não reescreva\n"
-        "  o arquivo."
+        "  o upload.\n"
+        "- Se a prova prática não estiver boa, você pode pedir que o material seja gerado\n"
+        "  novamente, em vez de corrigir à mão."
     )
     if pend_pratica:
         L.append("")
