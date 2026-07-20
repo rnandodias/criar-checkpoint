@@ -12,11 +12,12 @@ Produz, dentro da pasta do projeto:
   - instrucoes_coordenador.txt                 (folha de decisão para o coordenador)
   - revisao_coordenador_<slug>_nivel_<n>.zip   (instruções + provas + relatórios)
 
-O documento de instruções traz:
-  1) Prova teórica: lista das questões com checkbox para o coordenador marcar as
-     10 melhores para publicar.
-  2) Prova prática: etapas + a seção "Decisões pendentes" extraída do relatório de QA.
-  3) Como devolver o feedback.
+O documento de instruções é de LEITURA (o coordenador não devolve nada preenchido).
+Explica o que há no pacote e como revisar cada prova:
+  - Teórica: como revisar; a escolha das 10 que ficam ativas é feita na plataforma
+    (status ativo/inativo), não neste documento.
+  - Prática: etapas + aviso de não alterar as marcações do arquivo + os pontos que o
+    QA deixou em aberto (extraídos do relatório), apenas para consideração.
 
 Uso:
   python scripts/empacotar_para_coordenador.py --carreira "IA para Automação de Processos" --nivel 1
@@ -109,98 +110,95 @@ SEP = "=" * 64
 SUB = "-" * 64
 
 
+def _limpar_md(t: str) -> str:
+    """Deixa um trecho de markdown legível como texto puro (Bloco de Notas):
+    remove os `**` de negrito e troca marcadores de lista numerada `N.` por `-`."""
+    t = t.replace("**", "")
+    linhas = [re.sub(r"^(\s*)\d+\.\s+", r"\1- ", ln) for ln in t.splitlines()]
+    return "\n".join(linhas)
+
+
 def montar_instrucoes(carreira: str, nivel: int, base: Path) -> str:
     teorica = _ler(base, "prova_teorica.txt")
     pratica = _ler(base, "prova_pratica.txt")
-    rel_teorica = _ler(base, "prova_teorica_relatorio.md")
     rel_pratica = _ler(base, "prova_pratica_relatorio.md")
 
     questoes = _parse_questoes_teorica(teorica)
     etapas = _parse_etapas_pratica(pratica)
-    pend_teorica = _extrair_pendencias(rel_teorica)
     pend_pratica = _extrair_pendencias(rel_pratica)
 
     inclusos = [(n, r) for n, r in ARQUIVOS_PACOTE if (base / n).exists()]
 
     L = []
     L.append(SEP)
-    L.append("REVISÃO DE CHECKPOINT — INSTRUÇÕES AO COORDENADOR")
+    L.append(f"CHECKPOINT PARA REVISÃO — {carreira}, Nível {nivel}")
     L.append(SEP)
     L.append("")
-    L.append(f"Carreira: {carreira}")
-    L.append(f"Nível:    {nivel}")
     L.append(f"Gerado em: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
     L.append("")
-    L.append(SUB)
-    L.append("O QUE É ESTE PACOTE")
-    L.append(SUB)
     L.append(
-        "Este ZIP contém as atividades de checkpoint (prova teórica e prova prática)\n"
-        "do nível acima, para sua revisão ANTES da publicação na plataforma. As provas\n"
-        "já passaram por um QA automático (relatórios inclusos). Sua revisão foca em:\n"
-        "  (1) selecionar as questões da teórica que vão ao ar;\n"
-        "  (2) decidir os itens pendentes da prática;\n"
-        "  (3) validar o conteúdo e anotar correções."
+        "Este pacote reúne as atividades de checkpoint deste nível para a sua revisão\n"
+        "antes da publicação na plataforma. É material de leitura: você não precisa\n"
+        "preencher nem devolver nada por aqui."
     )
     L.append("")
-    L.append("Arquivos neste pacote:")
+    L.append(SUB)
+    L.append("O QUE HÁ NESTE PACOTE")
+    L.append(SUB)
     for n, r in inclusos:
         L.append(f"  - {n:<28} {r}")
     L.append("")
 
-    # ---- Seção 1: teórica ----
+    # ---- Prova teórica ----
+    n_q = len(questoes)
     L.append(SUB)
-    L.append("1) PROVA TEÓRICA — SELECIONE AS 10 MELHORES QUESTÕES")
-    L.append(SUB)
-    if questoes:
-        L.append(
-            f"São {len(questoes)} questões; a plataforma publica 10. Marque com [X] as 10 que\n"
-            "você quer publicar. A ordem das alternativas é embaralhada pela plataforma\n"
-            "na exibição ao aluno (não se preocupe com a posição da resposta correta)."
-        )
-        L.append("")
-        for q in questoes:
-            L.append(f"[ ] Q{q['num']:<3} (dif {q['dificuldade']})  {q['titulo']}")
-            L.append(f"        curso: {q['curso']}")
-        L.append("")
-        L.append(f"    Total marcado: ____ / 10")
-    else:
-        L.append("(prova_teorica.txt não encontrada ou sem questões parseáveis.)")
-    if pend_teorica:
-        L.append("")
-        L.append("Pendências da teórica apontadas pelo QA:")
-        L.append(pend_teorica)
-    L.append("")
-
-    # ---- Seção 2: prática ----
-    L.append(SUB)
-    L.append("2) PROVA PRÁTICA — DECISÕES PENDENTES")
-    L.append(SUB)
-    if etapas:
-        L.append("Etapas da prática:")
-        for e in etapas:
-            L.append(f"  - {e}")
-        L.append("")
-    if pend_pratica:
-        L.append("Itens que o QA deixou para sua decisão (detalhes no relatório da prática):")
-        L.append("")
-        L.append(pend_pratica)
-    else:
-        L.append("Nenhuma pendência registrada pelo QA da prática.")
-    L.append("")
-
-    # ---- Seção 3: como devolver ----
-    L.append(SUB)
-    L.append("3) COMO DEVOLVER O FEEDBACK")
+    L.append("COMO REVISAR A PROVA TEÓRICA")
     L.append(SUB)
     L.append(
-        "  - Marque com [X] as 10 questões escolhidas na seção 1.\n"
-        "  - Para cada item pendente da seção 2, escreva APROVAR ou a alteração desejada.\n"
-        "  - Anote qualquer correção de conteúdo diretamente no arquivo da prova ou numa lista.\n"
-        "  - Devolva este documento preenchido (e os arquivos que você alterou).\n"
-        "\n"
-        "Após o seu retorno, as correções são aplicadas e o checkpoint é publicado na\n"
-        "plataforma (Etapa 5 do pipeline — upload no admin da Alura)."
+        "- Revise o conteúdo (enunciado, alternativas e justificativas) em prova_teorica.txt.\n"
+        f"- A prova tem {n_q if n_q else 'várias'} questões; na publicação o nível fica com 10 ativas.\n"
+        "  Escolha as 10 melhores e deixe as demais como INATIVAS direto na plataforma — o\n"
+        "  status ativo/inativo de cada questão é definido lá, não neste documento.\n"
+        "- A ordem das alternativas é embaralhada pela plataforma a cada abertura da questão,\n"
+        "  então a posição da resposta correta não importa."
+    )
+    L.append("")
+
+    # ---- Prova prática ----
+    L.append(SUB)
+    L.append("COMO REVISAR A PROVA PRÁTICA")
+    L.append(SUB)
+    L.append(
+        "- prova_pratica.txt traz o enunciado do projeto por etapas e os datasets já\n"
+        "  embutidos (em blocos CSV). Revise o conteúdo normalmente."
+    )
+    if etapas:
+        L.append("  Etapas:")
+        for e in etapas:
+            L.append(f"    - {e}")
+    L.append(
+        "- NÃO altere a estrutura/marcações do arquivo: os cabeçalhos (#, ##) e os blocos\n"
+        "  **Pergunta-chave:**, **Sua missão:**, **Ferramentas:** e a matriz de cobertura\n"
+        "  são pontos de corte usados na importação para a plataforma — mexer neles quebra\n"
+        "  o upload. Se identificar uma correção de conteúdo, aponte-a à parte; não reescreva\n"
+        "  o arquivo."
+    )
+    if pend_pratica:
+        L.append("")
+        L.append("- Pontos que o QA deixou em aberto, apenas para a sua consideração")
+        L.append("  (detalhes no relatório da prática):")
+        L.append("")
+        L.append(_limpar_md(pend_pratica))
+    L.append("")
+
+    # ---- Relatórios ----
+    L.append(SUB)
+    L.append("RELATÓRIOS DE QA")
+    L.append(SUB)
+    L.append(
+        "Os dois relatórios (.md) detalham o que a revisão automática encontrou e o que já\n"
+        "foi corrigido em cada prova — servem de contexto. O que já está resolvido não\n"
+        "precisa ser revisto."
     )
     L.append("")
     L.append(SEP)
