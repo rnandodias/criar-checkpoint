@@ -83,6 +83,7 @@ CARREIRAS_NIVEIS: Dict[str, Dict[int, List[int]]] = {
     },
     "ia_para_automacao_de_processos": {
         1: [6306, 4067, 4930, 5226, 5435, 5721, 5355, 5869, 6310],
+        2: [4896, 5719, 5130, 6040, 6152, 5759, 5778],
     },
 }
 

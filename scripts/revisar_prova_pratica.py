@@ -416,6 +416,7 @@ def rerodar_etapa_4(
     nivel: int,
     resumos_arquivo: str,
     modo_dados: str,
+    perfil_modo: str,
     usar_batch: bool,
     reforco_texto: str,
 ) -> bool:
@@ -430,6 +431,7 @@ def rerodar_etapa_4(
         "--nivel", str(nivel),
         "--resumos_arquivo", resumos_arquivo,
         "--modo_dados", modo_dados,
+        "--perfil", perfil_modo,
         "--reforco_extra", str(reforco_path),
     ]
     if usar_batch:
@@ -453,6 +455,7 @@ def main():
     parser.add_argument("--nivel", type=int, choices=[1, 2, 3], required=True)
     parser.add_argument("--resumos_arquivo", type=str, default="")
     parser.add_argument("--modo_dados", type=str, choices=["auto", "com", "sem"], default="auto")
+    parser.add_argument("--perfil", type=str, choices=["auto", "programatica", "conceitual"], default="auto", help="Deve espelhar o --perfil usado na etapa 4. auto: heurística; programatica/conceitual: força o perfil (afeta a ótica do revisor cego e o rerun do escape hatch).")
     parser.add_argument("--batch", action="store_true", help="Passar --batch para o rerun (se disparar).")
     parser.add_argument("--pular-revisao", action="store_true")
     parser.add_argument("--escape-hatch", action="store_true", help="Habilita rerun automático (variante 3). DESLIGADO POR PADRÃO — sem esta flag, só reporta padrão sistêmico e para.")
@@ -476,7 +479,10 @@ def main():
 
     resumos = json.loads(Path(resumos_arquivo).read_text(encoding="utf-8"))
     ferramentas = _derivar_ferramentas_permitidas(resumos, None)
-    perfil = _perfil_carreira(resumos)
+    if args.perfil in ("programatica", "conceitual"):
+        perfil = args.perfil
+    else:
+        perfil = _perfil_carreira(resumos)
     if args.modo_dados == "com":
         envolve_dados = True
     elif args.modo_dados == "sem":
@@ -565,6 +571,7 @@ def main():
                 nivel=args.nivel,
                 resumos_arquivo=resumos_arquivo,
                 modo_dados=args.modo_dados,
+                perfil_modo=args.perfil,
                 usar_batch=args.batch,
                 reforco_texto=reforco,
             )
@@ -577,6 +584,7 @@ def main():
                     "--nivel", str(args.nivel),
                     "--resumos_arquivo", resumos_arquivo,
                     "--modo_dados", args.modo_dados,
+                    "--perfil", args.perfil,
                     "--nested",
                 ]
                 if args.batch:

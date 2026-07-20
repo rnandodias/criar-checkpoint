@@ -742,6 +742,7 @@ def gerar_aula3_txt(
     domains: List[str],
     ferramentas_cli: Optional[List[str]],
     modo_dados: str = "auto",  # "auto" | "com" | "sem"
+    perfil_modo: str = "auto",  # "auto" | "programatica" | "conceitual"
     verbose: bool = False,
 ) -> str:
     t_phase = {}
@@ -773,8 +774,12 @@ def gerar_aula3_txt(
         envolve_dados = envolve_dados_auto
 
     # Classifica perfil da carreira (programatica vs conceitual)
-    perfil = _perfil_carreira(resumos)
-    print(f"  → Perfil da carreira: {perfil} | envolve dados: {envolve_dados}")
+    if perfil_modo in ("programatica", "conceitual"):
+        perfil = perfil_modo
+        print(f"  → Perfil da carreira: {perfil} (override --perfil) | envolve dados: {envolve_dados}")
+    else:
+        perfil = _perfil_carreira(resumos)
+        print(f"  → Perfil da carreira: {perfil} (auto) | envolve dados: {envolve_dados}")
 
     _progress("  → Insumos prontos", 1, 1)
     _progress_done()
@@ -857,6 +862,7 @@ def main():
     parser.add_argument("--domains_arquivo", type=str, default="")
     parser.add_argument("--ferramentas_arquivo", type=str, default="")
     parser.add_argument("--modo_dados", type=str, choices=["auto","com","sem"], default="auto", help="auto (padrão): detecta pelo contexto; com: força datasets; sem: nunca gera datasets.")
+    parser.add_argument("--perfil", type=str, choices=["auto","programatica","conceitual"], default="auto", help="auto (padrão): heurística por %% de conteúdos procedimentais; programatica: força entregáveis práticos (código/scripts/automação); conceitual: força entregáveis documentais/diagramáticos.")
     parser.add_argument("--batch", action="store_true", help="Anthropic apenas: usa Message Batches API (50%% off, latência 5-30min vs ~3min sync).")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
@@ -911,6 +917,7 @@ def main():
         domains=domains,
         ferramentas_cli=ferramentas_cli,
         modo_dados=args.modo_dados,
+        perfil_modo=args.perfil,
         verbose=args.verbose,
     )
     elapsed = time.perf_counter() - t0
