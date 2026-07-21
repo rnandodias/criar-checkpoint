@@ -785,9 +785,12 @@ def criar_atividades_prova_teorica(
     limite: int = 0,
     offset: int = 0,
     indices: Optional[List[int]] = None,
+    deixar_inativas: bool = True,
     headless: bool = False,
 ) -> None:
     """Cria 1 atividade 'Única escolha' por EXERCÍCIO no arquivo TXT da prova teórica.
+    Por DEFAULT, ao final passa todas as atividades da seção para INACTIVE (o coordenador
+    ativa depois as questões escolhidas). Passe `deixar_inativas=False` para mantê-las ACTIVE.
     `offset=N` pula os primeiros N (útil para retomada após criação parcial).
     `limite=0` significa todos os restantes. `limite=N` processa apenas os N primeiros.
     `indices=[1,5,...]` (1-based) processa apenas os exercícios nessas posições — útil para
@@ -849,6 +852,16 @@ def criar_atividades_prova_teorica(
         for i, ex in enumerate(exercicios, start=1):
             print(f"\n  ── Exercício {i}/{len(exercicios)}: '{ex['titulo']}' ──")
             _criar_atividade_unica_escolha(page, course_id, section_id, ex)
+
+        # Default do projeto: as atividades teóricas nascem INACTIVE — o coordenador ativa
+        # depois as questões escolhidas. Use --manter-teoricas-ativas para pular esta etapa.
+        if deixar_inativas:
+            print(f"\n[Status] Passando as atividades teóricas para INACTIVE (default do projeto)...")
+            tarefas = _listar_tarefas_da_secao(page, course_id, section_id)
+            for k, t in enumerate(tarefas, start=1):
+                print(f"  [{k}/{len(tarefas)}] '{t['titulo']}' → INACTIVE")
+                _definir_status_tarefa(page, t["edit_url"], "INACTIVE")
+            print(f"      ✓ {len(tarefas)} atividades como INACTIVE")
 
         # Volta para /sections como pedido
         sections_url = f"https://cursos.alura.com.br/admin/courses/v2/{course_id}/sections"
@@ -1327,6 +1340,13 @@ def main() -> None:
         help=f"Lista CSV de nomes de seções. Default: '{','.join(SECOES_PADRAO)}'",
     )
     parser.add_argument("--headless", action="store_true", help="Roda sem janela visível (default: janela visível).")
+    parser.add_argument(
+        "--manter-teoricas-ativas",
+        dest="manter_teoricas_ativas",
+        action="store_true",
+        help="Por padrão, criar_atividades_prova_teorica passa as questões para INACTIVE ao final "
+             "(o coordenador ativa as escolhidas depois). Passe esta flag para deixá-las ACTIVE.",
+    )
     args = parser.parse_args()
 
     if args.etapa == "criar_secoes":
@@ -1355,6 +1375,7 @@ def main() -> None:
             limite=args.limite,
             offset=args.offset,
             indices=indices_list,
+            deixar_inativas=not args.manter_teoricas_ativas,
             headless=args.headless,
         )
     elif args.etapa == "criar_atividades_prova_pratica":
