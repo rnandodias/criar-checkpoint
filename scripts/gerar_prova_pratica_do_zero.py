@@ -790,10 +790,25 @@ Este projeto é apenas o começo. O mundo dos dados é vasto e cheio de oportuni
 **Sua jornada como Analista de Dados está apenas começando. Avance para o próximo nível!**"""
 
 
-def gerar_conclusao(client, carreira: str, nivel: int, ferramentas: List[str]) -> str:
+def gerar_conclusao(client, carreira: str, nivel: int, ferramentas: List[str], ultimo_nivel: bool = False) -> str:
     """Adapta o CONCLUSAO_BASE (Análise de Dados) para a carreira/nível via LLM.
     Preserva estrutura, seções, tom e formatação markdown; troca só o que é específico
-    de carreira (nome, nível, ferramentas citadas, artefatos do GitHub, hashtags)."""
+    de carreira (nome, nível, ferramentas citadas, artefatos do GitHub, hashtags).
+    Se `ultimo_nivel`, a Conclusão celebra o fim da carreira em vez de apontar 'próximo nível'."""
+    if ultimo_nivel:
+        regra_nivel = (
+            "- ATENÇÃO — este é o ÚLTIMO nível desta carreira (a formação TERMINA aqui). NÃO fale em "
+            "'próximo nível' nem 'avance para o próximo nível' e NÃO diga que a jornada 'está apenas "
+            "começando'. Reescreva a seção que no texto-base é `### **O próximo nível da carreira**` com "
+            "um título de encerramento (ex.: `### **E agora? Continue evoluindo**`), focando em aplicar "
+            "tudo o que aprendeu no mercado, aprofundar-se e buscar novos desafios profissionais — não um "
+            "próximo nível do checkpoint. A frase final deve CELEBRAR a conclusão da carreira/formação.\n"
+        )
+    else:
+        regra_nivel = (
+            "- Este NÃO é o último nível da carreira: mantenha o incentivo a avançar para o próximo "
+            "nível, como no texto-base.\n"
+        )
     system = (
         "Você adapta o texto de CONCLUSÃO de um checkpoint (fechamento motivacional de curso online) "
         "para uma carreira e nível específicos. Receberá um TEXTO-BASE (escrito para a carreira de "
@@ -809,12 +824,13 @@ def gerar_conclusao(client, carreira: str, nivel: int, ferramentas: List[str]) -
         "- Linguagem neutra e inclusiva ('profissional', 'pessoa'); nunca masculino genérico nem "
         "'você foi contratado'.\n"
         "- Não invente fatos, números, preços ou nomes de produtos fora da lista de ferramentas.\n"
+        f"{regra_nivel}"
         "- Retorne APENAS o markdown final da conclusão, sem comentários nem cercas de código."
     )
     ferr = ", ".join(ferramentas) if ferramentas else "(não especificadas)"
     user = (
         f"Carreira: {carreira or '(não informada)'}\n"
-        f"Nível: {nivel}\n"
+        f"Nível: {nivel}{'  (ÚLTIMO nível da carreira)' if ultimo_nivel else ''}\n"
         f"Ferramentas desta carreira (use estas ao citar ferramentas e ao montar as hashtags): {ferr}\n\n"
         "TEXTO-BASE (mantenha esta estrutura e formatação; adapte só o conteúdo específico de carreira):\n\n"
         f"{CONCLUSAO_BASE}"
@@ -830,6 +846,7 @@ def gerar_aula3_txt(
     ferramentas_cli: Optional[List[str]],
     modo_dados: str = "auto",  # "auto" | "com" | "sem"
     perfil_modo: str = "auto",  # "auto" | "programatica" | "conceitual"
+    ultimo_nivel: bool = False,
     verbose: bool = False,
 ) -> str:
     t_phase = {}
@@ -933,7 +950,7 @@ def gerar_aula3_txt(
     # Fase 4 — Finalização: Conclusão personalizada (LLM adapta o texto-base à carreira/nível)
     print("Fase 4/4: Finalizando (gerando Conclusão personalizada)...")
     try:
-        conclusao = gerar_conclusao(client, carreira or "", nivel, ferramentas)
+        conclusao = gerar_conclusao(client, carreira or "", nivel, ferramentas, ultimo_nivel=ultimo_nivel)
         txt = txt.rstrip() + "\n\n" + CONCLUSAO_MARKER + "\n\n" + conclusao.strip() + "\n"
     except Exception as e:
         print(f"  ⚠ Falha ao gerar Conclusão ({type(e).__name__}: {e}); TXT segue sem conclusão — a Etapa 5 usa o fallback padrão.")
@@ -955,6 +972,7 @@ def main():
     parser.add_argument("--ferramentas_arquivo", type=str, default="")
     parser.add_argument("--modo_dados", type=str, choices=["auto","com","sem"], default="auto", help="auto (padrão): detecta pelo contexto; com: força datasets; sem: nunca gera datasets.")
     parser.add_argument("--perfil", type=str, choices=["auto","programatica","conceitual"], default="auto", help="auto (padrão): heurística por %% de conteúdos procedimentais; programatica: força entregáveis práticos (código/scripts/automação); conceitual: força entregáveis documentais/diagramáticos.")
+    parser.add_argument("--ultimo-nivel", dest="ultimo_nivel", action="store_true", help="Marca este como o ÚLTIMO nível da carreira: a Conclusão celebra o fim da formação em vez de apontar para um próximo nível (default: assume que há próximo nível).")
     parser.add_argument("--batch", action="store_true", help="Anthropic apenas: usa Message Batches API (50%% off, latência 5-30min vs ~3min sync).")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
@@ -1010,6 +1028,7 @@ def main():
         ferramentas_cli=ferramentas_cli,
         modo_dados=args.modo_dados,
         perfil_modo=args.perfil,
+        ultimo_nivel=args.ultimo_nivel,
         verbose=args.verbose,
     )
     elapsed = time.perf_counter() - t0
