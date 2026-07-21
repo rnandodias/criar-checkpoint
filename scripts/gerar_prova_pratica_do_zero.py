@@ -761,6 +761,67 @@ def _progress_done():
 # =========================
 # Núcleo
 # =========================
+# =========================
+# Conclusão — gerada por LLM usando o texto padrão como estrutura fixa
+# =========================
+# Marcador que delimita a Conclusão no TXT (a Etapa 5 extrai o conteúdo após ele).
+CONCLUSAO_MARKER = "<!-- CONCLUSAO -->"
+
+# Texto-base (carreira de Análise de Dados). Serve como ESTRUTURA/ESQUELETO fixo:
+# o LLM adapta só o específico de carreira (nome, nível, ferramentas, artefatos, hashtags).
+CONCLUSAO_BASE = """## **Parabéns, Analista! Sua jornada continua!**
+
+Chegamos ao fim deste **Checkpoint para o Nível 1 da Carreira de Análise de Dados**! Se você chegou até aqui, significa que dominou as ferramentas essenciais e as habilidades analíticas fundamentais para um Analista de Dados iniciante. **Parabéns!** Você transformou dados brutos em insights valiosos, resolveu problemas complexos e comunicou suas descobertas de forma eficaz. Isso é o que um verdadeiro profissional de dados faz!
+
+### **Compartilhe seu sucesso!**
+
+Este projeto é uma prova concreta das suas habilidades. Não guarde-o só para você! Compartilhe seu trabalho e aprendizado:
+
+*   **GitHub:** Crie um repositório no GitHub para este projeto. Inclua seu código Python, as consultas SQL, os arquivos CSV (se permitido) e, o mais importante, um `README.md` detalhado. No `README`, explique o cenário de negócio, as perguntas que você respondeu, as ferramentas que utilizou, os desafios que enfrentou (e como os superou!), e os principais insights e recomendações que você gerou. Adicione screenshots do seu dashboard no Power BI!
+*   **LinkedIn:** Publique sobre sua experiência com este projeto no LinkedIn. Descreva o que você aprendeu, os desafios superados e como você aplicou seus conhecimentos para resolver um problema de negócio. Marque as ferramentas que você utilizou (Pandas, MySQL, Power BI, Matplotlib) e use hashtags relevantes como #Alura #AnaliseDeDados #DataAnalytics #PowerBI #MySQL #Pandas #CarreiraEmDados.
+*   **Portfólio:** Se você tem um portfólio online, adicione este projeto como um dos seus destaques. Ele demonstra sua capacidade de ir do dado bruto à recomendação estratégica.
+
+### **O próximo nível da carreira**
+
+Este projeto é apenas o começo. O mundo dos dados é vasto e cheio de oportunidades. Continue aprimorando suas habilidades e explorando novas áreas.
+
+> Lembre-se: a curiosidade e a paixão por resolver problemas são os maiores combustíveis para um **Analista de Dados**. Continue aprendendo, continue construindo e continue crescendo!
+
+**Sua jornada como Analista de Dados está apenas começando. Avance para o próximo nível!**"""
+
+
+def gerar_conclusao(client, carreira: str, nivel: int, ferramentas: List[str]) -> str:
+    """Adapta o CONCLUSAO_BASE (Análise de Dados) para a carreira/nível via LLM.
+    Preserva estrutura, seções, tom e formatação markdown; troca só o que é específico
+    de carreira (nome, nível, ferramentas citadas, artefatos do GitHub, hashtags)."""
+    system = (
+        "Você adapta o texto de CONCLUSÃO de um checkpoint (fechamento motivacional de curso online) "
+        "para uma carreira e nível específicos. Receberá um TEXTO-BASE (escrito para a carreira de "
+        "Análise de Dados) e deve reescrevê-lo trocando SOMENTE o que é específico de carreira: o nome "
+        "da carreira, o número do nível, as ferramentas citadas, os artefatos sugeridos para o GitHub "
+        "(o que a pessoa sobe no repositório) e as hashtags do LinkedIn.\n\n"
+        "REGRAS DURAS:\n"
+        "- Preserve EXATAMENTE a mesma estrutura, as mesmas seções, a mesma ordem, o mesmo tom "
+        "entusiasmado e a MESMA formatação markdown (títulos `##`/`###`, itens `*`, citação `>`, "
+        "**negrito**). O resultado deve ter o mesmo esqueleto do texto-base.\n"
+        "- Cite APENAS ferramentas da lista fornecida (não use ferramentas de outra carreira, como "
+        "Power BI, SQL ou Pandas, a menos que estejam na lista).\n"
+        "- Linguagem neutra e inclusiva ('profissional', 'pessoa'); nunca masculino genérico nem "
+        "'você foi contratado'.\n"
+        "- Não invente fatos, números, preços ou nomes de produtos fora da lista de ferramentas.\n"
+        "- Retorne APENAS o markdown final da conclusão, sem comentários nem cercas de código."
+    )
+    ferr = ", ".join(ferramentas) if ferramentas else "(não especificadas)"
+    user = (
+        f"Carreira: {carreira or '(não informada)'}\n"
+        f"Nível: {nivel}\n"
+        f"Ferramentas desta carreira (use estas ao citar ferramentas e ao montar as hashtags): {ferr}\n\n"
+        "TEXTO-BASE (mantenha esta estrutura e formatação; adapte só o conteúdo específico de carreira):\n\n"
+        f"{CONCLUSAO_BASE}"
+    )
+    return _chat(client, MODEL_GEN, system, user).strip()
+
+
 def gerar_aula3_txt(
     nivel: int,
     carreira: str,
@@ -869,8 +930,13 @@ def gerar_aula3_txt(
         _progress_done()
     t_phase["post"] = time.perf_counter() - t3
 
-    # Fase 4 — Finalização
-    print("Fase 4/4: Finalizando...")
+    # Fase 4 — Finalização: Conclusão personalizada (LLM adapta o texto-base à carreira/nível)
+    print("Fase 4/4: Finalizando (gerando Conclusão personalizada)...")
+    try:
+        conclusao = gerar_conclusao(client, carreira or "", nivel, ferramentas)
+        txt = txt.rstrip() + "\n\n" + CONCLUSAO_MARKER + "\n\n" + conclusao.strip() + "\n"
+    except Exception as e:
+        print(f"  ⚠ Falha ao gerar Conclusão ({type(e).__name__}: {e}); TXT segue sem conclusão — a Etapa 5 usa o fallback padrão.")
     t_phase["total"] = time.perf_counter() - t_start
     if verbose:
         print(f"[Tempos] prep={t_phase['prep']:.1f}s | gen={t_phase['gen']:.1f}s | post={t_phase['post']:.1f}s | total={t_phase['total']:.1f}s")

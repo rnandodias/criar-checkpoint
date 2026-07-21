@@ -912,6 +912,20 @@ Este projeto é apenas o começo. O mundo dos dados é vasto e cheio de oportuni
 **Sua jornada como Analista de Dados está apenas começando. Avance para o próximo nível!**"""
 
 
+# Marcador que a Etapa 4 usa para delimitar a Conclusão personalizada no TXT.
+CONCLUSAO_MARKER = "<!-- CONCLUSAO -->"
+
+
+def _extrair_conclusao(txt: str) -> Optional[str]:
+    """Retorna o conteúdo da Conclusão gerada na Etapa 4 (tudo após CONCLUSAO_MARKER),
+    ou None se o TXT não tiver o marcador (provas antigas → fallback hardcoded)."""
+    idx = txt.find(CONCLUSAO_MARKER)
+    if idx == -1:
+        return None
+    conteudo = txt[idx + len(CONCLUSAO_MARKER):].strip()
+    return conteudo or None
+
+
 def _resolve_prova_pratica_path(carreira: str, nivel: int, override: str = "") -> "Path":
     from pathlib import Path
     if override:
@@ -988,8 +1002,17 @@ def criar_atividades_prova_pratica(
     if not secoes_parseadas:
         raise RuntimeError("Nenhuma seção encontrada no TXT da prova prática.")
 
-    # Lista final = parseadas + Conclusão hardcoded
-    todas: List[tuple] = list(secoes_parseadas) + [("Conclusão", PRATICA_CONCLUSAO_HARDCODED)]
+    # Conclusão: se a Etapa 4 gerou uma (personalizada por carreira/nível), ela vem no TXT
+    # após o marcador; senão, fallback para o texto padrão hardcoded (provas antigas).
+    conclusao_txt = _extrair_conclusao(txt)
+    if conclusao_txt:
+        print("Conclusão: extraída do TXT (personalizada na Etapa 4).")
+    else:
+        conclusao_txt = PRATICA_CONCLUSAO_HARDCODED
+        print("Conclusão: seção não encontrada no TXT — usando fallback padrão (texto de Análise de Dados).")
+
+    # Lista final = parseadas + Conclusão
+    todas: List[tuple] = list(secoes_parseadas) + [("Conclusão", conclusao_txt)]
     print(f"Total de atividades (com Conclusão): {len(todas)}")
     for i, (t, c) in enumerate(todas, start=1):
         print(f"  [{i}] '{t}' ({len(c)} chars)")
