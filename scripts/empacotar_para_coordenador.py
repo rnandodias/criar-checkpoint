@@ -36,7 +36,7 @@ OUTPUT_BASE = Path(__file__).resolve().parent.parent / "output"
 # Arquivos que entram no ZIP (nome no disco -> rótulo no índice das instruções).
 ARQUIVOS_PACOTE = [
     ("prova_teorica.txt", "prova teórica (múltipla escolha)"),
-    ("prova_pratica.txt", "prova prática (projeto por etapas + datasets)"),
+    ("prova_pratica.txt", "prova prática"),  # rótulo real é calculado por formato em montar_instrucoes
     ("prova_teorica_relatorio.md", "relatório do QA da teórica"),
     ("prova_pratica_relatorio.md", "relatório do QA da prática"),
 ]
@@ -74,6 +74,20 @@ def _parse_questoes_teorica(txt: str) -> list:
 def _parse_etapas_pratica(txt: str) -> list:
     """Lista os títulos das etapas da prática (cabeçalhos '## Nª Etapa: ...')."""
     return re.findall(r"^##\s+(\d+ª\s+Etapa:.*)$", txt, re.MULTILINE)
+
+
+def _detectar_formato_pratica(txt: str) -> tuple:
+    """Detecta (is_cases, tem_datasets) a partir do corpo da prova prática.
+
+    - is_cases: prova de ANÁLISE DE CASES (--formato cases) — identificada pelos blocos
+      "O que caracteriza uma boa análise" (análise aberta, sem gabarito).
+    - tem_datasets: há datasets embutidos como blocos de código (```), presentes só
+      quando a prática envolve dados.
+    """
+    low = txt.lower()
+    is_cases = ("o que caracteriza uma boa análise" in low) or ("análise de cases" in low)
+    tem_datasets = "```" in txt
+    return is_cases, tem_datasets
 
 
 def _extrair_pendencias(relatorio_md: str) -> str:
@@ -127,7 +141,17 @@ def montar_instrucoes(carreira: str, nivel: int, base: Path) -> str:
     etapas = _parse_etapas_pratica(pratica)
     pend_pratica = _extrair_pendencias(rel_pratica)
 
-    inclusos = [(n, r) for n, r in ARQUIVOS_PACOTE if (base / n).exists()]
+    is_cases, tem_datasets = _detectar_formato_pratica(pratica)
+    if is_cases:
+        label_pratica = "prova prática (análise de cases por etapas)"
+    elif tem_datasets:
+        label_pratica = "prova prática (projeto por etapas + datasets)"
+    else:
+        label_pratica = "prova prática (projeto por etapas)"
+
+    rotulos = dict(ARQUIVOS_PACOTE)
+    rotulos["prova_pratica.txt"] = label_pratica
+    inclusos = [(n, rotulos[n]) for n, _r in ARQUIVOS_PACOTE if (base / n).exists()]
 
     L = []
     L.append(SEP)
@@ -168,17 +192,37 @@ def montar_instrucoes(carreira: str, nivel: int, base: Path) -> str:
     L.append(SUB)
     L.append("COMO REVISAR A PROVA PRÁTICA")
     L.append(SUB)
-    L.append(
-        "- prova_pratica.txt traz o enunciado do projeto por etapas e os datasets já\n"
-        "  embutidos (em blocos CSV). Revise o conteúdo normalmente."
-    )
+    if is_cases:
+        L.append(
+            "- prova_pratica.txt traz um case único de análise, estruturado em etapas\n"
+            "  (entregáveis documentais: pareceres, matrizes, diagramas). Não há código\n"
+            "  nem datasets. Revise o conteúdo normalmente."
+        )
+    elif tem_datasets:
+        L.append(
+            "- prova_pratica.txt traz o enunciado do projeto por etapas e os datasets já\n"
+            "  embutidos (em blocos CSV). Revise o conteúdo normalmente."
+        )
+    else:
+        L.append(
+            "- prova_pratica.txt traz o enunciado do projeto por etapas.\n"
+            "  Revise o conteúdo normalmente."
+        )
     if etapas:
         L.append("  Etapas:")
         for e in etapas:
             L.append(f"    - {e}")
+    if tem_datasets:
+        L.append(
+            "- Você PODE editar o corpo do texto diretamente no arquivo — enunciados, dicas,\n"
+            "  descrições e os dados (blocos CSV) — para corrigir o que precisar."
+        )
+    else:
+        L.append(
+            "- Você PODE editar o corpo do texto diretamente no arquivo — enunciados, dicas\n"
+            "  e descrições — para corrigir o que precisar."
+        )
     L.append(
-        "- Você PODE editar o corpo do texto diretamente no arquivo — enunciados, dicas,\n"
-        "  descrições e os dados (blocos CSV) — para corrigir o que precisar.\n"
         "- NÃO altere as marcações estruturais: os cabeçalhos (#, ##) e os blocos\n"
         "  **Pergunta-chave:**, **Sua missão:**, **Ferramentas:** e a matriz de cobertura\n"
         "  são pontos de corte usados na importação para a plataforma — mexer neles quebra\n"
@@ -194,16 +238,20 @@ def montar_instrucoes(carreira: str, nivel: int, base: Path) -> str:
         L.append(_limpar_md(pend_pratica))
     L.append("")
 
-    # ---- Relatórios ----
-    L.append(SUB)
-    L.append("RELATÓRIOS DE QA")
-    L.append(SUB)
-    L.append(
-        "Os dois relatórios (.md) detalham o que a revisão automática encontrou e o que já\n"
-        "foi corrigido em cada prova — servem de contexto. O que já está resolvido não\n"
-        "precisa ser revisto."
+    # ---- Relatórios (só se houver .md no pacote) ----
+    tem_relatorios = any(
+        (base / n).exists() for n in ("prova_teorica_relatorio.md", "prova_pratica_relatorio.md")
     )
-    L.append("")
+    if tem_relatorios:
+        L.append(SUB)
+        L.append("RELATÓRIOS DE QA")
+        L.append(SUB)
+        L.append(
+            "Os relatórios (.md) detalham o que a revisão automática encontrou e o que já\n"
+            "foi corrigido em cada prova — servem de contexto. O que já está resolvido não\n"
+            "precisa ser revisto."
+        )
+        L.append("")
     L.append(SEP)
     return "\n".join(L) + "\n"
 
