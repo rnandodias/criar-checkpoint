@@ -373,6 +373,109 @@ def user_prompt_aula3_txt(
         "- Escalone a dificuldade (1ª→4ª etapa) e inclua a Matriz de cobertura no final."
     )
 
+
+def system_prompt_aula3_cases_txt() -> str:
+    """System prompt ISOLADO para o formato ANÁLISE DE CASES (carreiras conceituais).
+    Não substitui system_prompt_aula3_txt — é uma variante selecionada por --formato cases."""
+    return """Você é uma pessoa especialista em desenho instrucional e avaliação por competências.
+Sua tarefa é gerar a **Aula 3 – "03.Prova prática"** de um curso de Checkpoint no formato **ANÁLISE DE CASES**, usando **exclusivamente** as informações dos **resumos dos cursos do nível** (entrada do usuário).
+
+Este formato é para carreiras **conceituais/analíticas**: a prova **NÃO é um projeto de implementação**. É a **análise de um caso realista** em que a pessoa **diagnostica um problema, decide com base em trade-offs e comunica** — como uma pessoa profissional faz no dia a dia.
+
+Regras gerais (mantenha TODAS):
+- **Autoridade da lista de ferramentas (REGRA DURA)**: use APENAS ferramentas da lista "Ferramentas permitidas" do user prompt. NÃO extraia ferramentas adicionais dos resumos. Se não está na lista, não foi ensinada e não pode aparecer.
+- **Fidelidade aos resumos (REGRA DURA)**: não invente conceitos, técnicas, frameworks ou ferramentas que não apareçam nos resumos. Construa a análise APENAS sobre o que está como `demonstrado` ou `praticado`; itens `apenas_mencionado` podem ser citados em texto, nunca exigidos como tarefa.
+- **Cobertura do nível**: ao longo das etapas, mobilize ao menos um conteúdo de CADA curso do nível (mapeie ao final na Matriz de cobertura).
+- **PROIBIDO nuvem paga** (AWS, Amazon, Azure, GCP, Google Cloud e derivados que gerem custo ao aluno).
+- **Linguagem neutra**, sem masculino genérico; use "a empresa te contratou", "a equipe que você integra"; **nunca** "você foi contratado".
+- **Sem links externos** (exceto o Fórum da Alura no bloco padrão).
+- **Sem meta-comentários (REGRA DURA)**: aplique as regras NO texto, nunca as cite, explique ou defenda. O texto deve parecer escrito diretamente para a pessoa aluna, sem pistas das diretrizes.
+- **Transferência (não imitar a aula)**: o case deve ser um cenário NOVO que exige transferir o que foi aprendido — nunca reproduzir/continuar um exemplo das aulas.
+
+Regras ESPECÍFICAS do formato ANÁLISE DE CASES (REGRAS DURAS):
+- **NÃO gere datasets** (nenhum bloco ```csv/```json) e **NÃO peça código, scripts, SQL ou implementação**. Os entregáveis são **documentais/analíticos**: documentos de análise, tabelas comparativas, registros de decisão, diagramas, pareceres.
+- **Um CASE ÚNICO evolutivo**: escolha um cenário realista (empresa/sistema/situação fictícia) e mantenha-o em TODAS as 4 etapas, aumentando a complexidade. Cada etapa avança o MESMO case.
+- **Fluxo profissional**: estruture as 4 etapas espelhando como a profissão realmente trabalha um caso — tipicamente da **compreensão do problema** → **análise/diagnóstico** → **decisão justificada por trade-offs** → **documentação e comunicação a stakeholders**. Derive o fluxo específico dos resumos da carreira.
+- **IA como copiloto (EIXO)**: SE os resumos ensinarem o uso de IA/LLM como apoio ao trabalho, então CADA etapa deve incorporar explicitamente o uso de **IA como ferramenta de apoio à análise** (ex.: usar um LLM com prompt estruturado para organizar o raciocínio, transformar entradas vagas em artefatos, gerar um rascunho e depois criticá-lo). Faça isso de forma fiel ao que os resumos mostram — não invente capacidades.
+- **Análise ABERTA, sem gabarito**: não existe resposta única. NÃO forneça a resposta "correta". Em vez disso, oriente o que caracteriza uma boa análise.
+- **Entregáveis são SUGESTÕES**, não obrigações: apresente-os como caminhos possíveis, dando liberdade de formato à pessoa.
+- **Escalonar dificuldade** da 1ª para a 4ª etapa, integrando mais conceitos.
+
+Formato de SAÍDA (TEXTO PURO) — siga exatamente:
+
+# 03.Prova prática
+**Domínio escolhido:** <nome do case/cenário> — <explicação breve do cenário>
+**Ferramentas exigidas ao longo da aula:** <lista simples separada por vírgulas>
+
+## Descrição do projeto
+<parágrafos apresentando o case, o papel da pessoa e o que ela vai analisar, decidir e comunicar ao longo das etapas; linguagem neutra>
+
+## Antes de começar
+## Dedicação
+O tempo esperado para você investir no desenvolvimento do projeto é de [COLOCAR ESTIMATIVA NO FORMATO: XX a XX] horas de dedicação. Se você estiver demorando muito mais que isso, pode ser que esteja indo longe demais.
+
+## Dúvidas?
+É normal surgirem dúvidas no meio da análise. Peça ajuda! Utilize ferramentas de IA, Google e documentações, quanto do próprio [Fórum da Alura](https://cursos.alura.com.br/forum/todos/1?hasAccessMGM=true).
+
+## Preparando o ambiente
+<o que ter à mão para a análise: acesso a uma ferramenta de IA (dentre as permitidas), ferramenta de diagramação/documento, etc. SEM instalações de código e SEM datasets.>
+
+## 1ª Etapa: <título curto da etapa>
+<contexto do case nesta etapa e o que se pede analisar>
+**Pergunta-chave:** "<pergunta única de análise>"
+**Sua missão:**
+1. <passo de análise>
+2. <passo — incluindo uso de IA como copiloto quando os resumos suportarem>
+3. <passo>
+**Entregáveis sugeridos:** <caminhos possíveis, NÃO obrigatórios>
+**O que caracteriza uma boa análise:** <2 a 4 critérios de qualidade — orientação, nunca gabarito>
+**Ferramentas:** <lista curta>
+---
+**Dicas para a análise da 1ª etapa:**
+* <dica que orienta sem entregar a resposta>
+* <dica>
+
+## 2ª Etapa: <título curto>
+... (mesmo padrão, aumentando a complexidade)
+
+## 3ª Etapa: <título curto>
+... (mesmo padrão; foco na decisão e nos trade-offs)
+
+## 4ª Etapa: <título curto>
+... (mesmo padrão; integração, documentação e comunicação a stakeholders)
+
+## Matriz de cobertura (auditoria)
+Liste cada curso do nível em uma linha, no formato:
+- <nome do curso>: conceitos_alvo resumidos → etapas relacionadas (ex.: "1ª, 3ª")
+"""
+
+
+def user_prompt_aula3_cases_txt(
+    nivel_str: str,
+    carreira_str: str,
+    domains_list_formatada: str,
+    ferramentas_permitidas: List[str],
+    resumos_json_do_nivel: str,
+) -> str:
+    ferr = json.dumps(ferramentas_permitidas, ensure_ascii=False)
+    return (
+        "Gere a **Aula 3 – Prova prática** no formato ANÁLISE DE CASES, seguindo integralmente as regras do sistema e retornando **apenas TEXTO** no formato exigido.\n\n"
+        f"Contexto do nível:\n- Nível: {nivel_str}\n- Carreira: {carreira_str}\n- Formato: ANÁLISE DE CASES (sem código, sem datasets)\n\n"
+        "Cenários/domínios sugeridos (escolha um como base do case e mantenha-o em todas as etapas):\n"
+        + domains_list_formatada
+        + "\n\nFerramentas permitidas (use apenas dentre estas):\n"
+        + ferr
+        + "\n\nResumos dos cursos (fonte única de verdade):\n```json\n"
+        + resumos_json_do_nivel
+        + "\n```\n\n"
+        "Observações finais:\n"
+        "- A carreira evolui em níveis (1 básico → 3 avançado); ajuste a profundidade da análise ao nível informado.\n"
+        "- NÃO gere datasets nem peça código; os entregáveis são documentais/analíticos e são SUGESTÕES (não obrigatórios).\n"
+        "- Incorpore o uso de IA como copiloto em cada etapa QUANDO os resumos ensinarem isso.\n"
+        "- A análise é aberta: NÃO forneça gabarito; oriente o que caracteriza uma boa análise.\n"
+        "- Escalone a dificuldade (1ª→4ª etapa) e inclua a Matriz de cobertura no final."
+    )
+
 # =========================
 # OpenAI helper
 # =========================
@@ -846,6 +949,7 @@ def gerar_aula3_txt(
     ferramentas_cli: Optional[List[str]],
     modo_dados: str = "auto",  # "auto" | "com" | "sem"
     perfil_modo: str = "auto",  # "auto" | "programatica" | "conceitual"
+    formato: str = "projeto",  # "projeto" | "cases"
     ultimo_nivel: bool = False,
     verbose: bool = False,
 ) -> str:
@@ -890,17 +994,21 @@ def gerar_aula3_txt(
     t_phase["prep"] = time.perf_counter() - t1
 
     # Fase 2 — Geração (1 chamada)
-    print(f"Fase 2/4: Gerando texto da prova ({MODEL_GEN})...")
+    print(f"Fase 2/4: Gerando texto da prova ({MODEL_GEN}, formato={formato})...")
     t2 = time.perf_counter()
     _progress("  → Solicitando ao modelo", 0, 1)
-    _system = system_prompt_aula3_txt()
-    if REFORCO_EXTRA:
-        _system = f"{_system}\n\n# === REFORÇO INJETADO PELO REVISOR (rerun) ===\n{REFORCO_EXTRA}\n# === fim reforço injetado ==="
-    txt = _chat(
-        client,
-        MODEL_GEN,
-        _system,
-        user_prompt_aula3_txt(
+    if formato == "cases":
+        _system = system_prompt_aula3_cases_txt()
+        _user = user_prompt_aula3_cases_txt(
+            nivel_str=f"Nível {nivel}",
+            carreira_str=carreira or "",
+            domains_list_formatada=domains_list_formatada,
+            ferramentas_permitidas=ferramentas,
+            resumos_json_do_nivel=resumos_json,
+        )
+    else:
+        _system = system_prompt_aula3_txt()
+        _user = user_prompt_aula3_txt(
             nivel_str=f"Nível {nivel}",
             carreira_str=carreira or "",
             domains_list_formatada=domains_list_formatada,
@@ -908,7 +1016,14 @@ def gerar_aula3_txt(
             resumos_json_do_nivel=resumos_json,
             carreira_env_dados=envolve_dados,
             perfil_carreira=perfil,
-        ),
+        )
+    if REFORCO_EXTRA:
+        _system = f"{_system}\n\n# === REFORÇO INJETADO PELO REVISOR (rerun) ===\n{REFORCO_EXTRA}\n# === fim reforço injetado ==="
+    txt = _chat(
+        client,
+        MODEL_GEN,
+        _system,
+        _user,
     )
     _progress("  → Solicitando ao modelo", 1, 1)
     _progress_done()
@@ -973,6 +1088,7 @@ def main():
     parser.add_argument("--modo_dados", type=str, choices=["auto","com","sem"], default="auto", help="auto (padrão): detecta pelo contexto; com: força datasets; sem: nunca gera datasets.")
     parser.add_argument("--perfil", type=str, choices=["auto","programatica","conceitual"], default="auto", help="auto (padrão): heurística por %% de conteúdos procedimentais; programatica: força entregáveis práticos (código/scripts/automação); conceitual: força entregáveis documentais/diagramáticos.")
     parser.add_argument("--ultimo-nivel", dest="ultimo_nivel", action="store_true", help="Marca este como o ÚLTIMO nível da carreira: a Conclusão celebra o fim da formação em vez de apontar para um próximo nível (default: assume que há próximo nível).")
+    parser.add_argument("--formato", type=str, choices=["projeto","cases"], default="projeto", help="projeto (padrão): projeto prático de implementação (fluxo testado); cases: prova de ANÁLISE DE CASES p/ carreiras conceituais (sem código/datasets, IA como copiloto). Combine com --perfil conceitual --modo_dados sem.")
     parser.add_argument("--batch", action="store_true", help="Anthropic apenas: usa Message Batches API (50%% off, latência 5-30min vs ~3min sync).")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
@@ -1028,6 +1144,7 @@ def main():
         ferramentas_cli=ferramentas_cli,
         modo_dados=args.modo_dados,
         perfil_modo=args.perfil,
+        formato=args.formato,
         ultimo_nivel=args.ultimo_nivel,
         verbose=args.verbose,
     )
