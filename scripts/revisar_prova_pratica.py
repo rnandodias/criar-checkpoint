@@ -130,6 +130,47 @@ def _parse_json_tolerante(raw: str) -> Optional[Dict[str, Any]]:
 # Prompts
 # =========================
 
+# Marcadores inequívocos de que a própria issue se anula ("suspeitei, fui checar, estava tudo certo").
+# Conservador de propósito: só descarta quando a anulação é explícita, para não engolir achado real.
+_PADROES_AUTORREFUTACAO = [
+    r"desconsider(?:ar|e|ando|ada?)",
+    r"nenhuma a[çc][ãa]o (?:necess[áa]ria|requerida|é necess[áa]ria)",
+    r"n[ãa]o h[áa] (?:problema|defeito|issue|erro|viola[çc][ãa]o)",
+    r"n[ãa]o (?:constitui|configura|é) (?:um )?(?:problema|defeito)",
+    r"est[áa] (?:aderente|cobert[oa] pelos cursos)",
+    r"ap[óo]s reanálise",
+    r"sem necessidade de (?:corre[çc][ãa]o|ajuste)",
+]
+_RE_AUTORREFUTACAO = re.compile("|".join(_PADROES_AUTORREFUTACAO), re.IGNORECASE)
+
+
+def _issue_se_autorrefuta(issue: Dict[str, Any]) -> bool:
+    """True se a issue se anula: declara procede=false, ou o texto de descrição/sugestão
+    contém marcador explícito de que a suspeita foi investigada e descartada."""
+    if issue.get("procede") is False:
+        return True
+    texto = f"{issue.get('descricao', '')} {issue.get('sugestao', '')}"
+    return bool(_RE_AUTORREFUTACAO.search(texto))
+
+
+def filtrar_issues_autorrefutadas(issues: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], int]:
+    """Devolve (issues_mantidas, quantidade_descartada).
+
+    Existe porque o revisor às vezes abre uma issue, investiga no meio do próprio texto,
+    conclui que está tudo certo — e registra assim mesmo. Sem este filtro, uma issue anulada
+    chega ao relatório do coordenador e, pior, pode disparar a reescrita de uma seção inteira."""
+    mantidas = []
+    descartadas = 0
+    for it in issues:
+        if _issue_se_autorrefuta(it):
+            descartadas += 1
+            print(f"  [filtro] Issue '{it.get('categoria', '?')}' em "
+                  f"'{it.get('secao', 'geral')}' descartada (autorrefutada).")
+        else:
+            mantidas.append(it)
+    return mantidas, descartadas
+
+
 def system_prompt_revisor_estatico() -> str:
     return """Você é um revisor sênior de provas práticas educacionais para a plataforma Alura.
 
@@ -149,20 +190,39 @@ Dimensões SEMÂNTICAS (podem exigir olhar humano):
 - Realismo profissional: o cenário reflete o dia-a-dia REAL da profissão? Ou é um "trabalhinho acadêmico"?
 - Dicas de troubleshooting: cada etapa tem o mínimo necessário para o nível? Nível 1 pede mais dicas explícitas; Nível 3 tolera menos.
 
+COMO RACIOCINAR (leia antes de decidir):
+Ao suspeitar de um problema, investigue ANTES de registrar. Use o campo "analise" de cada issue para
+raciocinar: diga o que suspeitou, o que conferiu nos resumos/no TXT, e a que conclusão chegou.
+
+REGRA DA AUTORREFUTAÇÃO (a mais importante deste prompt):
+Se, ao investigar uma suspeita, você concluir que NÃO há defeito — que o conteúdo está coberto pelos
+cursos, que a etapa é viável, que a redação é aceitável — então **A ISSUE NÃO EXISTE**. NÃO a registre.
+Simplesmente não a inclua na lista.
+É ERRO GRAVE registrar uma issue cuja própria descrição ou sugestão diz "está aderente", "está correto",
+"é aceitável", "desconsiderar" ou "nenhuma ação necessária". Uma suspeita investigada e descartada não é
+um achado — é ruído, e polui um relatório que será lido por pessoas.
+Não existe pressão para encontrar problemas: uma prova íntegra deve retornar issues vazio.
+Retornar {"issues": []} é um resultado perfeitamente válido e esperado quando a prova está boa.
+
 REGRAS DE SAÍDA (invioláveis):
 1. Sua resposta INTEIRA deve ser UM ÚNICO objeto JSON válido. NADA fora do JSON — nem texto explicativo, nem crases de markdown, nem "```json".
 2. Primeiro caractere: `{`. Último caractere: `}`.
 3. Se a prova estiver íntegra, retorne exatamente: {"issues": []}
+4. Todo objeto de issue DEVE conter "analise" e "procede". Registre apenas issues com "procede": true.
+5. O campo "descricao" contém APENAS o defeito confirmado, em 1 frase afirmativa. Nada de raciocínio,
+   ressalvas, "porém", "na verdade" ou reconsiderações — esse conteúdo pertence ao campo "analise".
 
 Schema:
 {
   "issues": [
     {
+      "analise": "<o que você suspeitou, o que verificou e a conclusão a que chegou>",
+      "procede": <true|false — false se a investigação refutou a suspeita; nesse caso NÃO inclua esta issue>,
       "secao": "<nome da seção afetada, ex: '1ª Etapa: Modelagem'; use 'geral' se afeta o TXT todo>",
       "tipo": "<slug curto>",
       "categoria": "<uma de: viabilidade, progressao_dificuldade, cobertura_cursos, realismo_profissional, setup_incompleto, dataset_sintaxe, dataset_armadilha_nao_descrita, meta_comentario, dicas_insuficientes, ferramenta_fora_da_lista, outros>",
       "severidade": "<baixa|media|alta>",
-      "descricao": "<1 frase objetiva>",
+      "descricao": "<1 frase objetiva, apenas o defeito confirmado>",
       "auto_fix_possivel": <true|false>,
       "sugestao": "<instrução acionável>"
     }
@@ -516,6 +576,10 @@ def main():
     for i in analise["issues"]:
         if i.get("categoria") not in CATEGORIAS_VALIDAS:
             i["categoria"] = "outros"
+    analise["issues"], _descartadas = filtrar_issues_autorrefutadas(analise["issues"])
+    if _descartadas:
+        print(f"  {_descartadas} issue(s) autorrefutada(s) descartada(s) — não entram no "
+              f"relatório nem disparam auto-correção.")
     print(f"  Issues encontradas: {len(analise['issues'])}")
 
     # Fase B — teste de resolvedor

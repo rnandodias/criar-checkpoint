@@ -96,7 +96,7 @@ Dimensões OBJETIVAS (mecânicas — geralmente auto-corrigíveis):
 - Enunciado (contexto + pergunta norteadora): só é problema real se ficar ABAIXO de 60 palavras (contexto insuficiente pro aluno). A faixa ideal é 80-150, mas 60-200 é aceitável.
 - Alternativas: o critério é UTILIDADE PEDAGÓGICA, não tamanho absoluto. Alternativa curta (~10 palavras) pode ser ótima; alternativa longa (~60 palavras) pode ser ótima se for útil pro aprendizado. Só marque como issue se a alternativa não ensinar nada ou for tão longa que confunda.
 - Justificativas: mesmo critério — utilidade pedagógica manda. Marque só se a justificativa não explica ou for tão longa que perde o foco.
-- Linguagem neutra literal: "pessoa desenvolvedora", "A empresa te contratou". PROIBIDOS: "Você foi contratado", masculino genérico ("o desenvolvedor", "o usuário").
+- Linguagem neutra literal: "pessoa desenvolvedora", "A empresa te contratou", "A empresa contratou você", "A equipe que você integra" — TODAS essas formas são PERMITIDAS, pois "você" não flexiona em gênero. PROIBIDOS: particípio flexionado ("Você foi contratado/contratada") e masculino genérico ("o desenvolvedor", "o usuário", "o aluno"). NÃO marque issue por preferir uma forma neutra a outra: se não há flexão de gênero, não há problema.
 - Ausência de meta-comentários: o texto NÃO pode conter frases sobre o próprio texto (ex: "A linguagem neutra é mantida...", "Conforme as regras..."). As diretrizes ficam aplicadas, nunca citadas.
 
 Dimensões SEMÂNTICAS (podem exigir olhar humano):
@@ -106,21 +106,41 @@ Dimensões SEMÂNTICAS (podem exigir olhar humano):
 - O exercício adere ao resumo do curso citado? Ou inventa conceitos que não foram ensinados?
 - O nível da carreira está adequado? Nível 1 = mais explícito, contexto rico; Nível 3 = expectativa profissional, denso.
 
+COMO RACIOCINAR (leia antes de decidir):
+Ao suspeitar de um problema, investigue ANTES de registrar. Use o campo "analise" de cada issue para
+raciocinar: diga o que suspeitou, o que conferiu no resumo do curso, e a que conclusão chegou.
+
+REGRA DA AUTORREFUTAÇÃO (a mais importante deste prompt):
+Se, ao investigar uma suspeita, você concluir que NÃO há defeito — que o conteúdo está aderente ao
+resumo, que a forma está correta, que a redação é aceitável — então **A ISSUE NÃO EXISTE**. NÃO a
+registre. Simplesmente não a inclua na lista.
+É ERRO GRAVE registrar uma issue cuja própria descrição ou sugestão diz "está aderente", "está
+correto", "é aceitável", "desconsiderar" ou "nenhuma ação necessária". Uma suspeita investigada e
+descartada não é um achado — é ruído, e polui um relatório que será lido por pessoas.
+Não existe pressão para encontrar problemas: um exercício íntegro deve retornar issues vazio.
+Retornar {"issues": []} para os 20 exercícios é um resultado perfeitamente válido e esperado quando
+a prova está boa.
+
 REGRAS DE SAÍDA (invioláveis):
 1. Sua resposta INTEIRA deve ser UM ÚNICO objeto JSON válido. NADA fora do JSON — nem texto explicativo antes, nem comentários depois, nem crases de markdown envolvendo, nem "```json".
 2. Sua primeira caractere deve ser `{` e a última `}`.
 3. NÃO use comentários JSON (que não existem). NÃO use vírgulas soltas. NÃO use aspas curvas.
 4. Se o exercício estiver íntegro, retorne exatamente: {"exercicio_n": N, "issues": []}
+5. Todo objeto de issue DEVE conter "analise" e "procede". Registre apenas issues com "procede": true.
+6. O campo "descricao" contém APENAS o defeito confirmado, em 1 frase afirmativa. Nada de raciocínio,
+   ressalvas, "porém", "na verdade" ou reconsiderações — esse conteúdo pertence ao campo "analise".
 
 Schema do JSON:
 {
   "exercicio_n": <número do exercício>,
   "issues": [
     {
+      "analise": "<o que você suspeitou, o que verificou no resumo e a conclusão a que chegou>",
+      "procede": <true|false — false se a investigação refutou a suspeita; nesse caso NÃO inclua esta issue>,
       "tipo": "<slug curto>",
       "categoria": "<uma de: tamanho_enunciado, tamanho_alternativa, tamanho_justificativa, linguagem_nao_neutra, meta_comentario, contexto_pobre, alternativa_correta_incorreta, alternativa_incorreta_trivial, fora_do_resumo, outros>",
       "severidade": "<baixa|media|alta>",
-      "descricao": "<1 frase objetiva>",
+      "descricao": "<1 frase objetiva, apenas o defeito confirmado>",
       "auto_fix_possivel": <true|false>,
       "sugestao": "<instrução acionável para corrigir; se auto_fix_possivel=false, apontar para revisão humana>"
     }
@@ -278,6 +298,53 @@ def _parse_json_tolerante(raw: str) -> Optional[Dict[str, Any]]:
                         return p
                     break
     return None
+
+
+# =========================
+# Filtro de issues autorrefutadas
+# =========================
+
+# Marcadores inequívocos de que a própria issue se anula ("suspeitei, fui checar, estava tudo certo").
+# Conservador de propósito: só descarta quando a anulação é explícita, para não engolir achado real.
+_PADROES_AUTORREFUTACAO = [
+    r"desconsider(?:ar|e|ando|ada?)",
+    r"nenhuma a[çc][ãa]o (?:necess[áa]ria|requerida|é necess[áa]ria)",
+    r"n[ãa]o h[áa] (?:problema|defeito|issue|erro|viola[çc][ãa]o)",
+    r"n[ãa]o (?:constitui|configura|é) (?:um )?(?:problema|defeito)",
+    r"est[áa] aderente",
+    r"ap[óo]s reanálise",
+    r"sem necessidade de (?:corre[çc][ãa]o|ajuste)",
+]
+_RE_AUTORREFUTACAO = re.compile("|".join(_PADROES_AUTORREFUTACAO), re.IGNORECASE)
+
+
+def _issue_se_autorrefuta(issue: Dict[str, Any]) -> bool:
+    """True se a issue se anula: declara procede=false, ou o texto de descrição/sugestão
+    contém marcador explícito de que a suspeita foi investigada e descartada."""
+    if issue.get("procede") is False:
+        return True
+    texto = f"{issue.get('descricao', '')} {issue.get('sugestao', '')}"
+    return bool(_RE_AUTORREFUTACAO.search(texto))
+
+
+def filtrar_issues_autorrefutadas(analises: List[Dict[str, Any]]) -> int:
+    """Remove in-place as issues que se autorrefutam. Retorna quantas foram descartadas.
+
+    Existe porque o revisor às vezes abre uma issue, investiga no meio do próprio texto,
+    conclui que está tudo certo — e registra assim mesmo. Sem este filtro, uma issue anulada
+    chega ao relatório do coordenador e, pior, pode disparar auto-correção no TXT."""
+    total = 0
+    for a in analises:
+        mantidas = []
+        for it in a.get("issues", []):
+            if _issue_se_autorrefuta(it):
+                total += 1
+                print(f"  [filtro] Exercício {a.get('exercicio_n', '?')}: issue "
+                      f"'{it.get('categoria', '?')}' descartada (autorrefutada).")
+            else:
+                mantidas.append(it)
+        a["issues"] = mantidas
+    return total
 
 
 # =========================
@@ -640,6 +707,10 @@ def main():
     analises = analisar_em_batch(blocos, resumos, args.nivel)
 
     # Fase B — decisão de rota
+    descartadas = filtrar_issues_autorrefutadas(analises)
+    if descartadas:
+        print(f"[Revisor] {descartadas} issue(s) autorrefutada(s) descartada(s) — não entram no "
+              f"relatório nem disparam auto-correção.")
     total_issues = sum(len(a["issues"]) for a in analises)
     print(f"[Revisor] Issues encontradas: {total_issues}")
     padrao = detectar_padrao_sistemico(analises, blocos=blocos)
