@@ -38,6 +38,20 @@ SECOES_PADRAO = ["Apresentação", "Prova teórica", "Prova prática"]
 SECAO_PROVA_TEORICA = "Prova teórica"
 
 
+def _settle(page: Page, timeout: int = 15_000) -> None:
+    """Espera a página assentar, sem transformar rede lenta em falha fatal.
+
+    Tenta `networkidle` (rede parada por 500ms) e, se estourar, cai para
+    `domcontentloaded` — que já terá ocorrido. O admin da Alura carrega trackers e
+    analytics que às vezes nunca deixam a rede ociosa, e isso derrubava o upload no
+    meio do caminho com a mensagem enganosa de "login falhou". Onde o networkidle
+    funciona o comportamento é idêntico ao anterior; onde não, seguimos em frente."""
+    try:
+        page.wait_for_load_state("networkidle", timeout=timeout)
+    except PWTimeoutError:
+        page.wait_for_load_state("domcontentloaded", timeout=timeout)
+
+
 def _login(page: Page, email: str, password: str) -> None:
     # wait_until="domcontentloaded" evita esperar trackers/analytics que travam o "load"
     page.goto("https://cursos.alura.com.br/loginForm", wait_until="domcontentloaded", timeout=60_000)
@@ -50,7 +64,7 @@ def _login(page: Page, email: str, password: str) -> None:
             lambda url: "loginForm" not in url and "login" not in url.rstrip("/").split("/")[-1],
             timeout=30_000,
         )
-        page.wait_for_load_state("networkidle", timeout=15_000)
+        _settle(page, timeout=15_000)
     except PWTimeoutError as e:
         raise RuntimeError(
             "Login na Alura falhou. Verifique EMAIL/PASSWORD no .env, "
@@ -64,7 +78,7 @@ def _criar_uma_secao(page: Page, course_id: int, nome: str) -> str:
     sections_url = f"https://cursos.alura.com.br/admin/courses/v2/{course_id}/sections"
     print(f"  → GET {sections_url}")
     page.goto(sections_url, wait_until="domcontentloaded", timeout=60_000)
-    page.wait_for_load_state("networkidle", timeout=15_000)
+    _settle(page, timeout=15_000)
 
     print(f"  → Clicando em 'Nova seção'")
     # Tenta múltiplos seletores comuns para o link/botão "Nova seção"
@@ -89,7 +103,7 @@ def _criar_uma_secao(page: Page, course_id: int, nome: str) -> str:
 
     # Espera URL nova
     page.wait_for_url(f"**/admin/courses/v2/{course_id}/newSection", timeout=15_000)
-    page.wait_for_load_state("networkidle", timeout=15_000)
+    _settle(page, timeout=15_000)
     print(f"  → Em {page.url}")
 
     print(f"  → Preenchendo Nome: '{nome}'")
@@ -138,7 +152,7 @@ def _criar_uma_secao(page: Page, course_id: int, nome: str) -> str:
         )
     except PWTimeoutError:
         pass
-    page.wait_for_load_state("networkidle", timeout=15_000)
+    _settle(page, timeout=15_000)
     final_url = page.url
     print(f"  ✓ Seção '{nome}' criada — URL final: {final_url}")
     return final_url
@@ -152,7 +166,7 @@ def _marcar_secao_como_prova(page: Page, course_id: int, nome_secao: str) -> Non
     sections_url = f"https://cursos.alura.com.br/admin/courses/v2/{course_id}/sections"
     print(f"  → GET {sections_url}")
     page.goto(sections_url, wait_until="domcontentloaded", timeout=60_000)
-    page.wait_for_load_state("networkidle", timeout=15_000)
+    _settle(page, timeout=15_000)
 
     print(f"  → Procurando linha da seção '{nome_secao}' e clicando em 'Editar'")
     # Tenta múltiplas estruturas (tabela, lista, card)
@@ -178,7 +192,7 @@ def _marcar_secao_como_prova(page: Page, course_id: int, nome_secao: str) -> Non
         )
 
     # Espera a página de edição da seção carregar
-    page.wait_for_load_state("networkidle", timeout=15_000)
+    _settle(page, timeout=15_000)
     print(f"  → Em {page.url}")
 
     print(f"  → Marcando checkbox 'É prova?'")
@@ -236,7 +250,7 @@ def _marcar_secao_como_prova(page: Page, course_id: int, nome_secao: str) -> Non
     if not saved:
         raise RuntimeError(f"Botão 'Salvar' não encontrado em {page.url}.")
 
-    page.wait_for_load_state("networkidle", timeout=15_000)
+    _settle(page, timeout=15_000)
     print(f"  ✓ Seção '{nome_secao}' marcada como prova — URL final: {page.url}")
 
 
@@ -244,7 +258,7 @@ def _section_id_por_nome(page: Page, course_id: int, nome_secao: str) -> int:
     """Vai para /sections, procura a linha da seção e extrai o section_id do href de Editar."""
     sections_url = f"https://cursos.alura.com.br/admin/courses/v2/{course_id}/sections"
     page.goto(sections_url, wait_until="domcontentloaded", timeout=60_000)
-    page.wait_for_load_state("networkidle", timeout=15_000)
+    _settle(page, timeout=15_000)
 
     candidatos = [
         f"tr:has-text('{nome_secao}') a:has-text('Editar')",
@@ -366,7 +380,7 @@ def _criar_atividade_explicacao(
     tasks_url = f"https://cursos.alura.com.br/admin/course/v2/{course_id}/section/{section_id}/tasks"
     print(f"  → GET {tasks_url}")
     page.goto(tasks_url, wait_until="domcontentloaded", timeout=60_000)
-    page.wait_for_load_state("networkidle", timeout=15_000)
+    _settle(page, timeout=15_000)
 
     print(f"  → Clicando em 'Nova atividade'")
     candidatos_botao = [
@@ -387,7 +401,7 @@ def _criar_atividade_explicacao(
 
     # Em vez de esperar URL específica (Alura usa singular/plural inconsistente),
     # aguarda apenas networkidle e loga a URL real.
-    page.wait_for_load_state("networkidle", timeout=20_000)
+    _settle(page, timeout=20_000)
     print(f"  → Em {page.url}")
     if "/create" not in page.url and "/new" not in page.url:
         # Salva diagnóstico se a URL não parece ser a de criação
@@ -452,14 +466,14 @@ def _criar_atividade_explicacao(
     if not saved:
         raise RuntimeError(f"Botão 'Salvar' não encontrado em {page.url}.")
 
-    page.wait_for_load_state("networkidle", timeout=15_000)
+    _settle(page, timeout=15_000)
     print(f"  ✓ Atividade '{titulo}' criada — URL atual: {page.url}")
 
     # Volta para /sections como pedido pelo fluxo
     sections_url = f"https://cursos.alura.com.br/admin/courses/v2/{course_id}/sections"
     print(f"  → Retornando para {sections_url}")
     page.goto(sections_url, wait_until="domcontentloaded", timeout=60_000)
-    page.wait_for_load_state("networkidle", timeout=15_000)
+    _settle(page, timeout=15_000)
     return page.url
 
 
@@ -680,7 +694,7 @@ def _criar_atividade_unica_escolha(
     tasks_url = f"https://cursos.alura.com.br/admin/course/v2/{course_id}/section/{section_id}/tasks"
     print(f"  → GET {tasks_url}")
     page.goto(tasks_url, wait_until="domcontentloaded", timeout=60_000)
-    page.wait_for_load_state("networkidle", timeout=15_000)
+    _settle(page, timeout=15_000)
 
     print(f"  → Clicando em 'Nova atividade'")
     candidatos = [
@@ -699,7 +713,7 @@ def _criar_atividade_unica_escolha(
     if not clicked:
         raise RuntimeError(f"Botão 'Nova atividade' não encontrado em {tasks_url}")
 
-    page.wait_for_load_state("networkidle", timeout=20_000)
+    _settle(page, timeout=20_000)
     print(f"  → Em {page.url}")
 
     print(f"  → Selecionando tipo SINGLE_CHOICE (subopção 'Única escolha sobre o conteúdo da aula')")
@@ -709,7 +723,7 @@ def _criar_atividade_unica_escolha(
     print(f"     ✓ '{sel_res.get('label')}' (value={sel_res.get('value')})")
 
     # Aguarda DOM atualizar (campos específicos de única escolha podem aparecer depois)
-    page.wait_for_load_state("networkidle", timeout=10_000)
+    _settle(page, timeout=10_000)
     time.sleep(1.0)
 
     print(f"  → Preenchendo Título: '{exercicio['titulo']}'")
@@ -772,7 +786,7 @@ def _criar_atividade_unica_escolha(
     if not saved:
         raise RuntimeError(f"Botão 'Salvar' não encontrado em {page.url}")
 
-    page.wait_for_load_state("networkidle", timeout=20_000)
+    _settle(page, timeout=20_000)
     print(f"  ✓ Atividade '{exercicio['titulo']}' criada — URL atual: {page.url}")
     return page.url
 
@@ -867,7 +881,7 @@ def criar_atividades_prova_teorica(
         sections_url = f"https://cursos.alura.com.br/admin/courses/v2/{course_id}/sections"
         print(f"\n  → Retornando para {sections_url}")
         page.goto(sections_url, wait_until="domcontentloaded", timeout=60_000)
-        page.wait_for_load_state("networkidle", timeout=15_000)
+        _settle(page, timeout=15_000)
 
         print(f"\n✓ {len(exercicios)} atividades criadas.")
         browser.close()
@@ -1049,7 +1063,7 @@ def criar_atividades_prova_pratica(
         sections_url = f"https://cursos.alura.com.br/admin/courses/v2/{course_id}/sections"
         print(f"\n  → Retornando para {sections_url}")
         page.goto(sections_url, wait_until="domcontentloaded", timeout=60_000)
-        page.wait_for_load_state("networkidle", timeout=15_000)
+        _settle(page, timeout=15_000)
 
         print(f"\n✓ {len(todas)} atividades criadas.")
         browser.close()
@@ -1059,7 +1073,7 @@ def _listar_tarefas_da_secao(page: Page, course_id: int, section_id: int) -> Lis
     """Lista todas as tarefas (atividades) de uma seção. Retorna [{ordem, tipo, titulo, edit_url}]."""
     tasks_url = f"https://cursos.alura.com.br/admin/course/v2/{course_id}/section/{section_id}/tasks"
     page.goto(tasks_url, wait_until="domcontentloaded", timeout=60_000)
-    page.wait_for_load_state("networkidle", timeout=15_000)
+    _settle(page, timeout=15_000)
     js = """
     () => Array.from(document.querySelectorAll('a[href*="/task/edit/"]')).map(a => {
         const tr = a.closest('tr');
@@ -1082,7 +1096,7 @@ def _definir_status_tarefa(page: Page, edit_url: str, status: str) -> str:
         raise ValueError(f"Status inválido: {status}")
     full_url = edit_url if edit_url.startswith("http") else f"https://cursos.alura.com.br{edit_url}"
     page.goto(full_url, wait_until="domcontentloaded", timeout=60_000)
-    page.wait_for_load_state("networkidle", timeout=15_000)
+    _settle(page, timeout=15_000)
 
     candidatos_select = [
         "select[id='task.status']",
@@ -1111,7 +1125,7 @@ def _definir_status_tarefa(page: Page, edit_url: str, status: str) -> str:
             continue
     if not saved:
         raise RuntimeError(f"Botão 'Salvar' não encontrado em {full_url}")
-    page.wait_for_load_state("networkidle", timeout=15_000)
+    _settle(page, timeout=15_000)
     return page.url
 
 
