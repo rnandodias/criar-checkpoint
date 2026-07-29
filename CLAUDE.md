@@ -105,6 +105,12 @@ python scripts/upload_checkpoint_alura.py --curso_id 5256 --etapa criar_atividad
   --carreira "Governança de Dados" --nivel 1
 ```
 
+## Regra de operação (assistentes): parâmetros são decisão do usuário
+
+**NUNCA escolha por conta própria parâmetros que afetem custo, latência ou escopo de um run, e NUNCA infira a urgência ou a intenção do usuário.** Isso inclui `--batch` vs. execução síncrona (batch = 50% mais barato, 5-30 min; sync = rápido e o dobro do preço), `--max_questoes`, `--min_por_curso` / `--max_por_curso`, `--perfil`, `--formato`, `--modo_dados`, `--ultimo-nivel`, `--escape-hatch`.
+
+Um "pode rodar" autoriza **a etapa**, não os **parâmetros**. Se o usuário não especificou um valor com trade-off, pergunte — mesmo que o custo pareça baixo e mesmo que a escolha pareça óbvia. Não escreva justificativas do tipo "escolhi X porque você quer Y".
+
 ## Diretrizes para quem for editar o código
 
 - Adicionar uma nova carreira/nível: editar o dicionário em `scripts/carreiras_niveis.py`. Não duplicar IDs em múltiplos lugares.
