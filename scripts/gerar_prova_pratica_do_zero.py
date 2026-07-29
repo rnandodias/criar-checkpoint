@@ -234,7 +234,7 @@ Regras gerais (mantenha TODAS):
   - Se **conceitual** (governança, papéis, processos, políticas): prefira **entregáveis documentais e diagramáticos** — planilhas, documentos, fluxogramas, organogramas, políticas escritas, glossários em planilha. Use linguagens de programação ou bibliotecas (Python, Pandas, etc.) APENAS quando a tarefa não puder ser representada de outra forma — e mesmo aí, mantenha o uso minimalista (1 etapa no máximo, com script curto).
   - Se **programática** (back-end, ciência de dados, ML): priorize código, scripts, configurações e datasets, com etapas técnicas mais densas.
 - **Profundidade dos itens**: nos resumos, cada habilidade/conceito/exemplo vem com `profundidade` ∈ {`demonstrado`, `praticado`, `apenas_mencionado`}. Construa entregáveis APENAS sobre o que está como `demonstrado` ou `praticado`. Itens `apenas_mencionado` podem ser referenciados em texto, mas nunca pedidos como tarefa.
-- **Cobertura do nível**: inclua ao longo das etapas ao menos **um item** que mobilize **cada curso** do nível (faça mapeamento ao final). NÃO UTILIZE FERRAMENTAS DE NUVEM (AWS, Amazon, Azure, GCP, Google Cloud Platform e qualquer serviço derivado destes grandes serviços) que geram custos para os alunos.
+- **Seleção coerente, NÃO cobertura total**: o projeto não precisa mobilizar todos os cursos do nível. Como no dia a dia profissional, o problema é que define quais conhecimentos entram — nem toda solução usa todo o repertório. Escolha os cursos que o cenário genuinamente exige e ignore os demais sem constrangimento; cursos de nivelamento (fundamentos) só entram se o problema realmente os pedir. NUNCA force uma etapa artificial só para "fechar" a lista de cursos: uma prova enxuta e coesa vale mais que uma abrangente e postiça. Registre o recorte na Matriz de cobertura, incluindo o que ficou de fora. NÃO UTILIZE FERRAMENTAS DE NUVEM (AWS, Amazon, Azure, GCP, Google Cloud Platform e qualquer serviço derivado destes grandes serviços) que geram custos para os alunos.
 - **Não invente conteúdo**: não introduza ferramentas, conceitos ou técnicas que **não apareçam** nos resumos; apenas adapte e combine o que já foi visto.
 - **Ferramentas e prática**: cada etapa deve **usar ao menos uma ferramenta da lista "Ferramentas permitidas"**. Se a lista contém apenas ferramentas não-programáticas (planilhas, documentos, diagramação), as etapas devem ser entregas documentais/diagramáticas — **não** force scripts Python ou consultas SQL.
 - **Dados (APENAS quando aplicável)**:
@@ -341,8 +341,11 @@ O tempo esperado para você investir no desenvolvimento do projeto é de [COLOCA
 ... (mesmo padrão; integração de múltiplos conceitos)
 
 ## Matriz de cobertura (auditoria)
+Registro INFORMATIVO do recorte escolhido — não é checklist a ser fechado.
 Liste cada curso do nível em uma linha, no formato:
 - <nome do curso>: conceitos_alvo resumidos → etapas relacionadas (ex.: "1ª, 3ª")
+Para os cursos que o cenário não exigiu, escreva "não mobilizado" no lugar das etapas.
+Cursos não mobilizados são resultado esperado de um recorte realista, não uma lacuna.
 """
 
 def user_prompt_aula3_txt(
@@ -385,8 +388,8 @@ Este formato é para carreiras **conceituais/analíticas**: a prova **NÃO é um
 Regras gerais (mantenha TODAS):
 - **Autoridade da lista de ferramentas (REGRA DURA)**: use APENAS ferramentas da lista "Ferramentas permitidas" do user prompt. NÃO extraia ferramentas adicionais dos resumos. Se não está na lista, não foi ensinada e não pode aparecer.
 - **Fidelidade aos resumos (REGRA DURA)**: não invente conceitos, técnicas, frameworks ou ferramentas que não apareçam nos resumos. Construa a análise APENAS sobre o que está como `demonstrado` ou `praticado`; itens `apenas_mencionado` podem ser citados em texto, nunca exigidos como tarefa.
-- **Cobertura do nível**: ao longo das etapas, mobilize ao menos um conteúdo de CADA curso do nível (mapeie ao final na Matriz de cobertura).
-- **PROIBIDO nuvem paga** (AWS, Amazon, Azure, GCP, Google Cloud e derivados que gerem custo ao aluno).
+- **Seleção coerente, NÃO cobertura total**: o case não precisa mobilizar todos os cursos do nível. Como no dia a dia profissional, o problema é que define quais conhecimentos entram — um caso realista usa parte do repertório, não todo. Escolha os cursos que o cenário genuinamente exige e ignore os demais sem constrangimento; cursos de nivelamento (fundamentos) só entram se o problema realmente os pedir. NUNCA force uma etapa artificial só para "fechar" a lista de cursos: uma prova enxuta e coesa vale mais que uma abrangente e postiça. Registre o recorte na Matriz de cobertura, incluindo o que ficou de fora.
+- **Nuvem no case**: serviços de nuvem (AWS, Azure, GCP) PODEM aparecer como contexto de análise — custo, latência, região, SLA, trade-off de arquitetura. O que é PROIBIDO é exigir que a pessoa aluna **provisione ou contrate** qualquer recurso (criar conta, subir instância, executar `apply`): a prova é analítica, nada é executado, e nenhuma tarefa pode gerar custo.
 - **Linguagem neutra**, sem masculino genérico; use "a empresa te contratou", "a equipe que você integra"; **nunca** "você foi contratado".
 - **Sem links externos** (exceto o Fórum da Alura no bloco padrão).
 - **Sem meta-comentários (REGRA DURA)**: aplique as regras NO texto, nunca as cite, explique ou defenda. O texto deve parecer escrito diretamente para a pessoa aluna, sem pistas das diretrizes.
@@ -445,8 +448,11 @@ O tempo esperado para você investir no desenvolvimento do projeto é de [COLOCA
 ... (mesmo padrão; integração, documentação e comunicação a stakeholders)
 
 ## Matriz de cobertura (auditoria)
+Registro INFORMATIVO do recorte escolhido — não é checklist a ser fechado.
 Liste cada curso do nível em uma linha, no formato:
 - <nome do curso>: conceitos_alvo resumidos → etapas relacionadas (ex.: "1ª, 3ª")
+Para os cursos que o cenário não exigiu, escreva "não mobilizado" no lugar das etapas.
+Cursos não mobilizados são resultado esperado de um recorte realista, não uma lacuna.
 """
 
 
@@ -893,11 +899,25 @@ Este projeto é apenas o começo. O mundo dos dados é vasto e cheio de oportuni
 **Sua jornada como Analista de Dados está apenas começando. Avance para o próximo nível!**"""
 
 
-def gerar_conclusao(client, carreira: str, nivel: int, ferramentas: List[str], ultimo_nivel: bool = False) -> str:
+def _ferramentas_reais_da_prova(txt: str) -> List[str]:
+    """Extrai a lista do cabeçalho '**Ferramentas exigidas ao longo da aula:**' do TXT gerado.
+    São as ferramentas que a prova de fato usa — mais restrito que a lista de permitidas
+    derivada dos resumos, e é isso que a Conclusão deve citar. Lista vazia se não achar."""
+    m = re.search(r"\*\*Ferramentas exigidas ao longo da aula:\*\*\s*(.+)", txt)
+    if not m:
+        return []
+    return [f.strip() for f in m.group(1).split(",") if f.strip()]
+
+
+def gerar_conclusao(client, carreira: str, nivel: int, ferramentas: List[str], ultimo_nivel: bool = False,
+                    formato: str = "projeto") -> str:
     """Adapta o CONCLUSAO_BASE (Análise de Dados) para a carreira/nível via LLM.
     Preserva estrutura, seções, tom e formatação markdown; troca só o que é específico
     de carreira (nome, nível, ferramentas citadas, artefatos do GitHub, hashtags).
-    Se `ultimo_nivel`, a Conclusão celebra o fim da carreira em vez de apontar 'próximo nível'."""
+    Se `ultimo_nivel`, a Conclusão celebra o fim da carreira em vez de apontar 'próximo nível'.
+    Se `formato == "cases"`, os artefatos citados passam a ser documentais — o CONCLUSAO_BASE é
+    orientado a código e, sem esta trava, vaza 'scripts', 'Dockerfiles' e 'manifestos YAML' para
+    uma prova que não pede nenhuma linha de código."""
     if ultimo_nivel:
         regra_nivel = (
             "- ATENÇÃO — este é o ÚLTIMO nível desta carreira (a formação TERMINA aqui). NÃO fale em "
@@ -912,6 +932,22 @@ def gerar_conclusao(client, carreira: str, nivel: int, ferramentas: List[str], u
             "- Este NÃO é o último nível da carreira: mantenha o incentivo a avançar para o próximo "
             "nível, como no texto-base.\n"
         )
+    if formato == "cases":
+        regra_formato = (
+            "- ATENÇÃO — esta prova é de ANÁLISE DE CASES: a pessoa aluna NÃO escreveu código, não criou "
+            "scripts, não subiu contêineres e não executou nada. Os entregáveis são DOCUMENTAIS: documentos "
+            "de análise, tabelas comparativas, registros de decisão (ADR), diagramas, pareceres, resumos "
+            "executivos, planos e roteiros.\n"
+            "- PROIBIDO citar artefatos de código ou execução: scripts, Dockerfiles, manifestos YAML, "
+            "notebooks, código-fonte, 'containers em execução', 'screenshots dos logs', 'pipeline rodando', "
+            "'infraestrutura provisionada'. Onde o texto-base fala em subir código no GitHub, troque por "
+            "publicar os DOCUMENTOS produzidos (análises, diagramas, ADRs) com um README que explique o "
+            "caso, as decisões tomadas e os trade-offs avaliados.\n"
+            "- As hashtags devem refletir análise, arquitetura e decisão — não linguagens de programação "
+            "nem ferramentas que a prova não usou.\n"
+        )
+    else:
+        regra_formato = ""
     system = (
         "Você adapta o texto de CONCLUSÃO de um checkpoint (fechamento motivacional de curso online) "
         "para uma carreira e nível específicos. Receberá um TEXTO-BASE (escrito para a carreira de "
@@ -927,6 +963,7 @@ def gerar_conclusao(client, carreira: str, nivel: int, ferramentas: List[str], u
         "- Linguagem neutra e inclusiva ('profissional', 'pessoa'); nunca masculino genérico nem "
         "'você foi contratado'.\n"
         "- Não invente fatos, números, preços ou nomes de produtos fora da lista de ferramentas.\n"
+        f"{regra_formato}"
         f"{regra_nivel}"
         "- Retorne APENAS o markdown final da conclusão, sem comentários nem cercas de código."
     )
@@ -1065,7 +1102,11 @@ def gerar_aula3_txt(
     # Fase 4 — Finalização: Conclusão personalizada (LLM adapta o texto-base à carreira/nível)
     print("Fase 4/4: Finalizando (gerando Conclusão personalizada)...")
     try:
-        conclusao = gerar_conclusao(client, carreira or "", nivel, ferramentas, ultimo_nivel=ultimo_nivel)
+        # As ferramentas da Conclusão saem do cabeçalho da prova recém-gerada, não da lista de
+        # permitidas: citar o que a prova realmente usa evita vazar ferramenta que ficou de fora.
+        ferramentas_conclusao = _ferramentas_reais_da_prova(txt) or ferramentas
+        conclusao = gerar_conclusao(client, carreira or "", nivel, ferramentas_conclusao,
+                                    ultimo_nivel=ultimo_nivel, formato=formato)
         txt = txt.rstrip() + "\n\n" + CONCLUSAO_MARKER + "\n\n" + conclusao.strip() + "\n"
     except Exception as e:
         print(f"  ⚠ Falha ao gerar Conclusão ({type(e).__name__}: {e}); TXT segue sem conclusão — a Etapa 5 usa o fallback padrão.")

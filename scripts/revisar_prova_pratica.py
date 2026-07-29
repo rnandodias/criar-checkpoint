@@ -70,6 +70,11 @@ CATEGORIAS_VALIDAS = {
     "outros",
 }
 
+# Categorias que NUNCA disparam rerun da etapa 4 (escape hatch), por mais seções que afetem.
+# 'cobertura_cursos': recortar cursos é o comportamento desejado — a prova simula um problema
+# profissional real, e nenhum problema real mobiliza todo o repertório da carreira.
+CATEGORIAS_SEM_RERUN = {"cobertura_cursos"}
+
 
 def _safe_json_loads(s: str) -> Optional[Any]:
     if not s:
@@ -186,7 +191,7 @@ Dimensões OBJETIVAS (auto-fixáveis):
 Dimensões SEMÂNTICAS (podem exigir olhar humano):
 - Viabilidade técnica: uma pessoa aluna do nível informado resolve em 8-18h com os cursos concluídos?
 - Progressão de dificuldade da 1ª → 4ª etapa: sobe? Ou tudo no mesmo patamar?
-- Cobertura dos cursos: a "Matriz de cobertura" no final bate com o que é pedido nas etapas?
+- Coerência do recorte (NÃO cobertura total): a prova NÃO precisa mobilizar todos os cursos do nível — recortar é o comportamento desejado, pois simula o dia a dia profissional, onde nem todo o repertório é usado em um problema. NUNCA marque issue por "curso X não foi abordado". Só marque se o recorte for INCOERENTE: a Matriz de cobertura afirma que um curso foi mobilizado mas nenhuma etapa o utiliza, ou uma etapa exige conhecimento de um curso que a matriz declara "não mobilizado".
 - Realismo profissional: o cenário reflete o dia-a-dia REAL da profissão? Ou é um "trabalhinho acadêmico"?
 - Dicas de troubleshooting: cada etapa tem o mínimo necessário para o nível? Nível 1 pede mais dicas explícitas; Nível 3 tolera menos.
 
@@ -450,7 +455,7 @@ def gerar_relatorio(
 REFORCOS_POR_CATEGORIA_PRATICA = {
     "viabilidade": "REFORÇO: para o nível informado, o projeto DEVE ser resolúvel em 8-18h com o que foi ensinado. Não peça técnicas ou ferramentas que os cursos não cobriram.",
     "progressao_dificuldade": "REFORÇO: as 4 etapas DEVEM ter dificuldade crescente. Etapa 1 = uma habilidade isolada; Etapa 4 = integração de múltiplos conceitos.",
-    "cobertura_cursos": "REFORÇO: cada curso do nível DEVE ter pelo menos uma habilidade central mobilizada nas etapas. A matriz de cobertura no final DEVE bater com o que é pedido.",
+    "cobertura_cursos": "REFORÇO: a Matriz de cobertura DEVE refletir o que as etapas realmente pedem — sem declarar como mobilizado um curso que nenhuma etapa usa, nem omitir curso que alguma etapa exige. NÃO é exigido cobrir todos os cursos do nível: recortar é o comportamento desejado.",
     "realismo_profissional": "REFORÇO CRÍTICO: o cenário DEVE refletir o dia-a-dia real da profissão (entregas em produção, integrações, decisões de arquitetura), não exercícios acadêmicos com aparência profissional.",
     "setup_incompleto": "REFORÇO: 'Preparando o ambiente' DEVE listar TODOS os pacotes, versões e passos para o aluno subir o ambiente e terminar a prova sem procurar em outra fonte.",
     "dataset_sintaxe": "REFORÇO: datasets inline DEVEM ser sintaticamente válidos, ter entre 30 e 120 linhas de dados, e vir com dicionário claro antes do bloco.",
@@ -609,10 +614,15 @@ def main():
         sec = t.get("secao", "geral")
         contagem_cat.setdefault(cat, set()).add(sec)
 
+    # 'cobertura_cursos' não dispara rerun: recortar cursos é comportamento desejado (simula o
+    # dia a dia profissional), então uma prova enxuta jamais deve ser regerada por esse motivo.
+    # Issues dessa categoria seguem no relatório para leitura humana — só não engatilham a etapa 4.
+    contagem_para_rerun = {k: v for k, v in contagem_cat.items() if k not in CATEGORIAS_SEM_RERUN}
+
     padrao_sistemico: Optional[str] = None
     secoes_do_padrao: List[str] = []
-    if contagem_cat:
-        cat_top, secs_top = max(contagem_cat.items(), key=lambda kv: len(kv[1]))
+    if contagem_para_rerun:
+        cat_top, secs_top = max(contagem_para_rerun.items(), key=lambda kv: len(kv[1]))
         if len(secs_top) >= LIMIAR_SISTEMICO_SECOES:
             padrao_sistemico = cat_top
             secoes_do_padrao = sorted(secs_top)
