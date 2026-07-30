@@ -81,12 +81,15 @@ def _detectar_formato_pratica(txt: str) -> tuple:
 
     - is_cases: prova de ANÁLISE DE CASES (--formato cases) — identificada pelos blocos
       "O que caracteriza uma boa análise" (análise aberta, sem gabarito).
-    - tem_datasets: há datasets embutidos como blocos de código (```), presentes só
-      quando a prática envolve dados.
+    - tem_datasets: há datasets embutidos, emitidos pelo gerador como blocos ```csv ou
+      ```json. Note que NÃO basta procurar por ``` — uma prova de cases pode trazer
+      artefatos técnicos para análise (manifestos YAML, consultas PromQL, relatórios de
+      vulnerabilidade) que são blocos de código sem serem dados tabulares, e tratá-los
+      como dataset gera instruções erradas para o coordenador.
     """
     low = txt.lower()
     is_cases = ("o que caracteriza uma boa análise" in low) or ("análise de cases" in low)
-    tem_datasets = "```" in txt
+    tem_datasets = bool(re.search(r"```\s*(csv|json)\b", txt, re.IGNORECASE))
     return is_cases, tem_datasets
 
 
