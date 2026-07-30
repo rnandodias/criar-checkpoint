@@ -63,6 +63,8 @@ CARREIRAS_NIVEIS: Dict[str, Dict[int, List[int]]] = {
         # Os 4 primeiros IDs (5438, 5440, 3584, 5442) são cursos do nível BASE
         # (nivelamento para iniciantes) — devem ter peso menor nas provas.
         1: [5438, 5440, 3584, 5442, 5741, 3830, 3726, 5792, 5769, 3529, 3392],
+        2: [4597, 5443, 5794, 5556, 5062, 5743, 5745, 5793],
+        3: [5063, 4962, 5005, 5451, 4515, 4086, 6412],
     },
     "site_reliability_engineering": {
         1: [3392, 1649, 4072, 2644, 2697, 2825, 2421, 3161, 3092],
