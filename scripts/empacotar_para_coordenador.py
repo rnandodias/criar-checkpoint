@@ -93,6 +93,27 @@ def _detectar_formato_pratica(txt: str) -> tuple:
     return is_cases, tem_datasets
 
 
+# Marcador que a etapa 4.7 deixa na prova para o coordenador preencher com o link.
+MARCADOR_LINK_DATASET = "[INSERIR AQUI O LINK DE DOWNLOAD]"
+
+
+def _datasets_gerados(base: Path) -> list:
+    """Lista (nome, nº de linhas) dos CSVs produzidos pela etapa 4.7, se ela rodou.
+    Devolve lista vazia quando não há base de dados — provas de cases, por exemplo."""
+    pasta = base / "dataset"
+    if not pasta.is_dir():
+        return []
+    achados = []
+    for csv in sorted(pasta.glob("*.csv")):
+        try:
+            with csv.open(encoding="utf-8") as fh:
+                linhas = max(0, sum(1 for _ in fh) - 1)  # desconta o cabeçalho
+        except Exception:
+            linhas = 0
+        achados.append((csv.name, linhas))
+    return achados
+
+
 def _extrair_pendencias(relatorio_md: str) -> str:
     """Extrai a seção 'Decisões pendentes' de um relatório de QA (.md).
 
@@ -241,6 +262,44 @@ def montar_instrucoes(carreira: str, nivel: int, base: Path) -> str:
         L.append(_limpar_md(pend_pratica))
     L.append("")
 
+    # ---- Base de dados gerada pela etapa 4.7 (só se o turbinador rodou) ----
+    csvs = _datasets_gerados(base)
+    if csvs:
+        L.append(SUB)
+        L.append("BASE DE DADOS — AÇÃO NECESSÁRIA ANTES DE PUBLICAR")
+        L.append(SUB)
+        L.append(
+            "Esta prova prática usa uma base de dados que NÃO fica dentro do enunciado:\n"
+            "ela é grande demais para isso. O arquivo já está pronto neste pacote, mas\n"
+            "precisa ser hospedado por você e o link precisa ser colado na prova.\n"
+        )
+        L.append("Arquivo(s) incluído(s) na pasta dataset/ deste pacote:")
+        for nome, linhas in csvs:
+            L.append(f"  - {nome}  ({linhas} linhas)")
+        L.append("")
+        L.append("O que fazer, na ordem:")
+        L.append(
+            "  1. Suba o(s) arquivo(s) da pasta dataset/ para um local de download público\n"
+            "     (Google Drive, S3, ou onde a coleção costuma hospedar material de apoio).\n"
+            "     Confira que o link abre em janela anônima, sem exigir login.\n"
+            "  2. Abra prova_pratica.txt e procure pelo marcador:\n"
+            f"        {MARCADOR_LINK_DATASET}\n"
+            "     Há um marcador para cada arquivo, logo após o nome dele.\n"
+            "  3. Substitua cada marcador pelo link correspondente. NÃO altere o restante\n"
+            "     do bloco: o nome do arquivo, a tabela de colunas e a amostra de linhas\n"
+            "     devem permanecer como estão, pois é assim que a pessoa aluna entende o\n"
+            "     formato dos dados.\n"
+            "  4. Confira que não sobrou nenhum marcador sem preencher antes de aprovar."
+        )
+        L.append("")
+        L.append(
+            "Sobre o arquivo gerar_dataset.py, também incluído: é o script que produziu\n"
+            "esses dados. Você NÃO precisa executá-lo — os CSVs já vêm prontos. Ele existe\n"
+            "para o caso de ser necessário regerar a base ou ajustar o volume no futuro.\n"
+            "A geração é determinística: rodar de novo produz exatamente os mesmos dados."
+        )
+        L.append("")
+
     # ---- Relatórios (só se houver .md no pacote) ----
     tem_relatorios = any(
         (base / n).exists() for n in ("prova_teorica_relatorio.md", "prova_pratica_relatorio.md")
@@ -291,6 +350,12 @@ def main() -> None:
     for nome, _rot in ARQUIVOS_PACOTE:
         if (base / nome).exists():
             arcs.append((nome, nome))
+
+    # Base de dados da etapa 4.7, quando existir: o script gerador e os CSVs prontos.
+    if (base / "gerar_dataset.py").exists():
+        arcs.append(("gerar_dataset.py", "gerar_dataset.py"))
+    for csv_nome, _linhas in _datasets_gerados(base):
+        arcs.append((f"dataset/{csv_nome}", f"dataset/{csv_nome}"))
 
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for nome, arcname in arcs:

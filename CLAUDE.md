@@ -17,6 +17,7 @@ Este projeto foi extraído/isolado a partir de dois projetos maiores do usuário
 3.5) revisar_prova_teorica.py          → sobrescreve prova_teorica.txt + backup .pre_revisao.txt + relatorio.md
 4)   gerar_prova_pratica_do_zero.py    → output/<slug>_nivel_<n>/prova_pratica.txt
 4.5) revisar_prova_pratica.py          → sobrescreve prova_pratica.txt + backup .pre_revisao.txt + relatorio.md
+4.7) turbinar_dataset_pratica.py       → gerar_dataset.py + dataset/*.csv (só se a prática tiver dataset)
 4.9) empacotar_para_coordenador.py     → instrucoes_coordenador.txt + revisao_coordenador_*.zip (handoff, sem LLM)
 5)   upload_checkpoint_alura.py        → publica seções/atividades no admin Alura (Playwright)
 ```
@@ -104,6 +105,41 @@ python scripts/upload_checkpoint_alura.py --curso_id 5256 --etapa criar_atividad
 python scripts/upload_checkpoint_alura.py --curso_id 5256 --etapa criar_atividades_prova_pratica \
   --carreira "Governança de Dados" --nivel 1
 ```
+
+## Etapa 4.7 — turbinador de dataset (opcional, só quando a prática tem dados)
+
+Roda **entre a 4.5 e a 4.9**, e só quando a prova prática contém bloco ```csv/```json — em provas
+`--formato cases` sai sem fazer nada. Existe porque o dataset inline que o LLM escreve na etapa 4 tem
+30-120 linhas e nenhuma estrutura estatística real: não dá para treinar, validar nem detectar
+overfitting com ele.
+
+**Divisão de trabalho — o LLM especifica, o código gera e valida:**
+1. LLM lê enunciado + dataset proposto → devolve uma **especificação** JSON (colunas, distribuições,
+   fórmula do alvo, defeitos declarados, chaves entre arquivos). Não escreve dados.
+2. Código gera `gerar_dataset.py` (determinístico, semente fixa) e o executa.
+3. Código **valida**: esquema, volume, proporção de nulos, integridade referencial, e principalmente
+   se os efeitos declarados **aparecem** nos dados e na **hierarquia** correta.
+4. LLM faz checagem semântica de escopo estreito (valores plausíveis? coerente com o enunciado?).
+5. Só então substitui o bloco inline por: marcador de link + dicionário de colunas + amostra.
+
+Qualquer reprovação **preserva o TXT**. Use `--dry-run` para gerar e conferir sem alterar nada.
+
+**PLAUSIBILIDADE CAUSAL é o ponto central.** Não basta a correlação existir: ela precisa ter o sinal e
+a força que a intuição do domínio espera. A demanda de ontem deve prever a de hoje melhor que a
+temperatura; chuva reduz circulação; distância aumenta tempo. Se os dados contradizem isso, a análise
+de importância de variáveis leva a conclusões absurdas e o exercício perde o valor. Por isso a spec
+tem o campo `importancia` (1-5) por termo, os efeitos são **reponderados** por ele (a escala bruta das
+colunas sozinha faz um fator secundário abafar o principal), e o validador reprova hierarquia
+invertida e efeito ausente, com limiar proporcional à importância declarada.
+
+**Entrega ao aluno:** o CSV NÃO vai inline. O coordenador sobe o arquivo na nuvem e cola o link no
+marcador `[INSERIR AQUI O LINK DE DOWNLOAD]` deixado na prova — assim quem não domina Python não trava
+na geração. O `empacotar_para_coordenador.py` detecta a pasta `dataset/`, inclui os CSVs e o script no
+ZIP, e acrescenta às instruções a seção explicando o procedimento.
+
+**PENDENTE:** o enunciado ainda descreve o dataset antigo ("~100 linhas", "8 valores ausentes",
+"3 outliers acima de 950"). Ao crescer a base, essas menções ficam falsas e a checagem semântica
+reprova — corretamente. Falta a fase que reescreve essas quantidades no texto.
 
 ## Regra de operação (assistentes): parâmetros são decisão do usuário
 
