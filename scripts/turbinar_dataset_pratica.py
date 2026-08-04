@@ -141,6 +141,24 @@ REGRAS:
   forma independente: quem resolver a prova vai conferir, e um mês que não corresponde à data
   denuncia dado inconsistente e invalida qualquer análise temporal.
 
+- **SÉRIES TEMPORAIS (leia com atenção se o cenário tem datas).** Se cada linha é a observação de uma
+  entidade num instante — vendas por loja por dia, demanda por região por dia, sensor por hora —,
+  preencha "serie_temporal". O número de linhas passa a ser `entidades × periodos`: declare quantas
+  entidades e quantos períodos de forma que o produto se aproxime do volume de referência pedido, e
+  que ambos sejam plausíveis (730 dias em 2 anos; 16 regiões numa operação metropolitana).
+
+- **DEFASAGENS DO ALVO (lag).** Se o cenário tem uma coluna do tipo "valor do período anterior"
+  (vendas de ontem, demanda da semana passada), ela NÃO é uma variável independente: é o próprio alvo
+  deslocado no tempo. Declare-a com "derivada_de": {"coluna": "<alvo>", "parte": "lag_1"} — o código
+  a calculará a partir do histórico real, dentro de cada entidade. Nunca a inclua na fórmula do alvo,
+  pois isso criaria uma definição circular. O mesmo vale para médias móveis.
+
+- **ESCOLHA A DEFASAGEM PELO USO, NÃO PELO HÁBITO.** O tamanho do lag precisa ser compatível com a
+  antecedência que a decisão do cenário exige. Se a previsão serve para dimensionar equipe, turno ou
+  frota, a decisão é tomada com dias de antecedência e o modelo NÃO terá o valor de ontem disponível:
+  use "lag_7" (ou maior). Um lag_1 só se justifica quando a decisão é tomada no próprio dia. Prefira
+  "lag_7" quando o enunciado falar em planejamento, escala ou dimensionamento.
+
 REGRAS DE SAÍDA (invioláveis):
 1. Responda APENAS com UM objeto JSON válido. Sem texto antes ou depois, sem crases de markdown.
 2. Primeiro caractere `{`, último `}`.
@@ -152,6 +170,7 @@ Schema:
       "nome": "<nome_do_arquivo.csv>",
       "papel": "<o que representa no cenário, 1 frase>",
       "linhas": <número inteiro de linhas sugerido; use o valor de referência informado no user prompt>,
+      "serie_temporal": {"coluna_data": "<coluna de data>", "inicio": "<YYYY-MM-DD, primeira data da série>", "coluna_entidade": "<coluna que identifica a entidade repetida ao longo do tempo, ou null>", "entidades": <quantas entidades distintas>, "periodos": <quantos períodos de tempo>, "frequencia": "<diaria|semanal|mensal>"} ou null,
       "chave_primaria": "<coluna|null>",
       "chave_estrangeira": {"coluna": "<col>", "referencia_arquivo": "<arquivo.csv>", "referencia_coluna": "<col>"} ou null,
       "colunas": [
@@ -164,7 +183,7 @@ Schema:
           "categorias": [{"valor": "<v>", "peso": <0-1>}],
           "decimais": <inteiro>,
           "papel": "<feature|alvo|identificador|temporal|auxiliar>",
-          "derivada_de": {"coluna": "<coluna de data de origem>", "parte": "<ano|mes|dia|dia_semana|hora|semana>"} ou null
+          "derivada_de": {"coluna": "<coluna de origem>", "parte": "<ano|mes|dia|dia_semana|hora|semana|lag_1|lag_7|media_movel_7|media_movel_28>"} ou null
         }
       ],
       "alvo": {
@@ -422,12 +441,59 @@ def _aplicar_defeitos(rng, df, defeitos, protegidas):
     return df
 
 
+def _grid_temporal(st, arq):
+    """Monta o esqueleto entidade x período. Cada linha passa a ser uma observação
+    real no calendário, e não um sorteio solto: é isso que permite calcular
+    defasagens e médias móveis com sentido."""
+    freq = {"diaria": "D", "semanal": "W", "mensal": "MS"}.get((st.get("frequencia") or "diaria").lower(), "D")
+    periodos = int(st.get("periodos") or 730)
+    n_ent = max(1, int(st.get("entidades") or 1))
+    col_data = st.get("coluna_data")
+    col_ent = st.get("coluna_entidade")
+
+    inicio = st.get("inicio")
+    for c in arq["colunas"]:
+        if c["nome"] == col_data:
+            inicio = inicio or (c.get("parametros") or {}).get("inicio")
+    try:
+        base = pd.Timestamp(inicio) if inicio else pd.Timestamp("2023-01-01")
+    except (ValueError, TypeError):
+        base = pd.Timestamp("2023-01-01")
+    datas = pd.date_range(start=base, periods=periodos, freq=freq)
+
+    if col_ent:
+        ents = np.arange(1, n_ent + 1)
+        idx = pd.MultiIndex.from_product([ents, datas], names=[col_ent, col_data])
+        df = idx.to_frame(index=False)
+    else:
+        df = pd.DataFrame({col_data: datas})
+    return df.sort_values([c for c in (col_ent, col_data) if c]).reset_index(drop=True)
+
+
 def gerar_arquivo(arq, gerados):
     rng = np.random.default_rng(SEMENTE + abs(hash(arq["nome"])) % 10_000)
-    n = int(arq.get("linhas") or 5000)
-    df = pd.DataFrame()
+    st = arq.get("serie_temporal")
+    if st and st.get("coluna_data"):
+        df = _grid_temporal(st, arq)
+        n = len(df)
+        col_ent = st.get("coluna_entidade")
+        # atributos da entidade são fixos no tempo: densidade da região não muda
+        # a cada dia. Sortear por linha produziria uma região que muda de tamanho
+        # diariamente, o que nenhuma análise por entidade sustentaria.
+        if col_ent:
+            ents = df[col_ent].unique()
+            for col in arq["colunas"]:
+                if col["nome"] in df.columns or (col.get("papel") or "") == "alvo" or col.get("derivada_de"):
+                    continue
+                if (col.get("papel") or "") == "auxiliar" or "densid" in (col.get("descricao") or "").lower():
+                    valores = _coluna(rng, col, len(ents), df)
+                    df[col["nome"]] = pd.Series(df[col_ent]).map(dict(zip(ents, valores)))
+    else:
+        n = int(arq.get("linhas") or 5000)
+        df = pd.DataFrame()
+
     for col in arq["colunas"]:
-        if (col.get("papel") or "") == "alvo":
+        if (col.get("papel") or "") == "alvo" or col.get("derivada_de") or col["nome"] in df.columns:
             continue
         df[col["nome"]] = _coluna(rng, col, n, df)
 
@@ -439,6 +505,8 @@ def gerar_arquivo(arq, gerados):
         d = col.get("derivada_de")
         if not d or not d.get("coluna") or d["coluna"] not in df.columns:
             continue
+        if str(d.get("parte") or "").startswith(("lag_", "media_movel_")):
+            continue  # dependem do alvo: calculadas depois que ele existe
         origem = pd.to_datetime(df[d["coluna"]], errors="coerce")
         parte = _PARTES.get((d.get("parte") or "").lower())
         if parte == "isocalendar":
@@ -486,7 +554,41 @@ def gerar_arquivo(arq, gerados):
             else:
                 df[alvo["coluna"]] = np.round(y, int(especificacao.get("decimais") or 2))
 
+    # Defasagens e janelas móveis: só agora, com o alvo já calculado, e SEMPRE
+    # a partir do histórico real — dentro de cada entidade e em ordem de tempo.
+    # Sortear uma coluna "valor do período anterior" produz um dado que se
+    # contradiz: quem resolver a prova faz shift() e obtém outros números.
+    if st and st.get("coluna_data"):
+        col_data, col_ent = st.get("coluna_data"), st.get("coluna_entidade")
+        df = df.sort_values([c for c in (col_ent, col_data) if c]).reset_index(drop=True)
+        for col in arq["colunas"]:
+            d = col.get("derivada_de") or {}
+            parte = str(d.get("parte") or "")
+            origem = d.get("coluna")
+            if not origem or origem not in df.columns:
+                continue
+            grupo = df.groupby(col_ent)[origem] if col_ent else df[origem]
+            if parte.startswith("lag_"):
+                k = int(parte.split("_")[1] or 1)
+                df[col["nome"]] = grupo.shift(k)
+            elif parte.startswith("media_movel_"):
+                j = int(parte.split("_")[-1] or 7)
+                # shift(1) antes da janela: sem isso a média inclui o próprio dia
+                # e vaza o alvo para dentro da feature
+                base = grupo.shift(1)
+                df[col["nome"]] = (base.groupby(df[col_ent]).rolling(j, min_periods=1).mean()
+                                   .reset_index(level=0, drop=True) if col_ent
+                                   else base.rolling(j, min_periods=1).mean())
+            else:
+                continue
+            esp = next((c for c in arq["colunas"] if c["nome"] == col["nome"]), {})
+            if esp.get("tipo") == "int":
+                df[col["nome"]] = df[col["nome"]].round()
+
     protegidas = {alvo.get("coluna"), arq.get("chave_primaria")} - {None}
+    # lags não recebem nulos artificiais: os ausentes deles são os do início da série
+    protegidas |= {c["nome"] for c in arq["colunas"]
+                   if str((c.get("derivada_de") or {}).get("parte") or "").startswith(("lag_", "media_movel_"))}
     df = _aplicar_defeitos(rng, df, arq.get("defeitos") or {}, protegidas)
 
     temporais = [c["nome"] for c in arq["colunas"] if c.get("tipo") in ("data", "datetime") and c["nome"] in df.columns]
@@ -548,9 +650,15 @@ def validar(spec: Dict[str, Any], pasta: Path) -> Tuple[bool, List[str]]:
             msgs.append(f"ERRO: {arq['nome']} sem as colunas {sorted(faltando)}")
             ok = False
 
-        alvo_min = int(arq.get("linhas") or 5000) * 0.8
+        # numa série temporal o tamanho é entidades x períodos, não o campo "linhas"
+        _st = arq.get("serie_temporal") or {}
+        if _st.get("coluna_data"):
+            esperado = max(1, int(_st.get("entidades") or 1)) * int(_st.get("periodos") or 1)
+        else:
+            esperado = int(arq.get("linhas") or 5000)
+        alvo_min = esperado * 0.8
         if len(df) < alvo_min:
-            msgs.append(f"ERRO: {arq['nome']} tem {len(df)} linhas, abaixo do mínimo de {int(alvo_min)}")
+            msgs.append(f"ERRO: {arq['nome']} tem {len(df)} linhas, abaixo do mínimo de {int(alvo_min)} (esperado {esperado})")
             ok = False
         else:
             msgs.append(f"ok: {arq['nome']} — {len(df)} linhas, {len(df.columns)} colunas")
@@ -579,6 +687,31 @@ def validar(spec: Dict[str, Any], pasta: Path) -> Tuple[bool, List[str]]:
                 else:
                     msgs.append(f"ok: integridade referencial {arq['nome']}.{col} → {fk['referencia_arquivo']}")
 
+        # coerência das defasagens: o lag precisa bater com o histórico real
+        st = arq.get("serie_temporal") or {}
+        col_ent = st.get("coluna_entidade")
+        for col in arq["colunas"]:
+            d = col.get("derivada_de") or {}
+            parte = str(d.get("parte") or "")
+            origem = d.get("coluna")
+            if not parte.startswith("lag_") or not origem or origem not in df.columns:
+                continue
+            if col["nome"] not in df.columns:
+                continue
+            k = int(parte.split("_")[1] or 1)
+            esperado = (df.groupby(col_ent)[origem].shift(k) if col_ent and col_ent in df.columns
+                        else df[origem].shift(k))
+            comparavel = df[[col["nome"]]].join(esperado.rename("_esp")).dropna()
+            if len(comparavel) < 10:
+                continue
+            divergentes = (comparavel[col["nome"]].round() != comparavel["_esp"].round()).mean()
+            if divergentes > 0.02:
+                msgs.append(f"ERRO: {col['nome']} não corresponde a {origem} defasado em {k} "
+                            f"({divergentes:.0%} das linhas divergem do histórico real)")
+                ok = False
+            else:
+                msgs.append(f"ok: {col['nome']} confere com {origem} defasado em {k}")
+
         alvo = arq.get("alvo") or {}
         alvo_col = alvo.get("coluna")
         if not alvo_col or alvo_col not in df.columns:
@@ -588,12 +721,24 @@ def validar(spec: Dict[str, Any], pasta: Path) -> Tuple[bool, List[str]]:
         # precisa APARECER nos dados, e os fatores que o domínio considera mais
         # determinantes precisam correlacionar mais forte que os secundários — senão
         # a análise de importância de variáveis leva a conclusões contrárias à realidade.
-        observados = []
+        # Agrega os termos por coluna antes de validar: o modelo costuma declarar
+        # vários efeitos para a mesma variável (faixas sazonais, por exemplo), e o
+        # que se observa na correlação é sempre o efeito LÍQUIDO — validar termo a
+        # termo compararia a mesma correlação contra coeficientes parciais.
+        por_coluna = {}
         for termo in (alvo.get("formula") or []):
             c = termo.get("coluna")
-            coef = float(termo.get("coeficiente") or 0)
-            imp = float(termo.get("importancia") or 0)
-            if not c or c not in df.columns or coef == 0:
+            if not c:
+                continue
+            agr = por_coluna.setdefault(c, {"coef": 0.0, "imp": 0.0})
+            agr["coef"] += float(termo.get("coeficiente") or 0)
+            agr["imp"] = max(agr["imp"], float(termo.get("importancia") or 0))
+
+        observados = []
+        for c, agr in por_coluna.items():
+            coef = agr["coef"]
+            imp = agr["imp"]
+            if c not in df.columns or coef == 0:
                 continue
             if not pd.api.types.is_numeric_dtype(df[c]):
                 continue
@@ -740,6 +885,104 @@ def resumir_para_llm(spec: Dict[str, Any], pasta: Path) -> str:
         partes.append(df.head(LINHAS_AMOSTRA).to_string()[:2000])
         partes.append("")
     return "\n".join(partes)
+
+
+# =========================
+# Fase 4.5 — reconciliar o enunciado com os dados reais
+# =========================
+
+def system_prompt_reconciliacao() -> str:
+    return """Você corrige a descrição de uma base de dados dentro do enunciado de uma prova.
+
+A base foi regerada com volume e estrutura maiores, e o texto do enunciado ficou descrevendo a versão
+antiga. Frases como "~100 linhas", "8 valores ausentes", "3 outliers acima de 950" ou "uma região"
+tornaram-se falsas. Sua tarefa é reescrever esse trecho para que ele descreva com exatidão os dados
+que realmente existem.
+
+REGRAS:
+- Reescreva SOMENTE o que descreve a base: período coberto, quantidade de registros, granularidade,
+  significado das colunas e defeitos presentes. NÃO altere o cenário de negócio, as tarefas pedidas,
+  nem o tom do texto.
+- Use os números REAIS informados. Prefira proporções a contagens absolutas quando o defeito for
+  distribuído ("cerca de 1% dos registros" em vez de "8 registros"), porque a base pode ser regerada.
+- Se a granularidade mudou (passou a ter várias entidades ao longo do tempo), descreva isso com
+  clareza: quantas entidades, quantos períodos, e que cada linha é uma combinação das duas.
+- Se alguma coluna passou a ser derivada de outra (o valor de períodos anteriores, por exemplo),
+  explique isso no dicionário — inclusive que as primeiras linhas de cada entidade não têm esse valor.
+- Mantenha a formatação markdown existente (títulos, listas, negrito).
+
+REGRAS DE SAÍDA: responda APENAS com o texto corrigido, pronto para substituir o trecho original.
+Sem comentários, sem crases de markdown envolvendo, sem explicação do que mudou."""
+
+
+def user_prompt_reconciliacao(trecho: str, resumo_real: str) -> str:
+    return f"""TRECHO ATUAL DO ENUNCIADO (descreve a base antiga):
+```
+{trecho}
+```
+
+DADOS QUE REALMENTE FORAM GERADOS:
+```
+{resumo_real}
+```
+
+Reescreva o trecho para descrever com exatidão os dados reais."""
+
+
+def resumo_factual(spec: Dict[str, Any], pasta: Path) -> str:
+    """Fatos verificáveis sobre o que foi gerado — insumo da reconciliação."""
+    import pandas as pd
+    linhas = []
+    for arq in spec["arquivos"]:
+        caminho = pasta / arq["nome"]
+        if not caminho.exists():
+            continue
+        df = pd.read_csv(caminho)
+        st = arq.get("serie_temporal") or {}
+        linhas.append(f"Arquivo: {arq['nome']}")
+        linhas.append(f"  Registros: {len(df)}")
+        if st.get("coluna_data") and st["coluna_data"] in df.columns:
+            d = pd.to_datetime(df[st["coluna_data"]], errors="coerce")
+            linhas.append(f"  Período: {d.min():%d/%m/%Y} a {d.max():%d/%m/%Y}")
+        if st.get("coluna_entidade") and st["coluna_entidade"] in df.columns:
+            linhas.append(f"  Entidades distintas em '{st['coluna_entidade']}': {df[st['coluna_entidade']].nunique()}")
+            linhas.append(f"  Granularidade: uma linha por entidade e período")
+        for c in df.columns:
+            n = int(df[c].isna().sum())
+            if n:
+                linhas.append(f"  Valores ausentes em '{c}': {n} ({n/len(df):.1%})")
+        for col in arq["colunas"]:
+            d = col.get("derivada_de") or {}
+            if str(d.get("parte") or "").startswith(("lag_", "media_movel_")):
+                linhas.append(f"  '{col['nome']}' é derivada de '{d.get('coluna')}' ({d.get('parte')}) — "
+                              f"calculada do histórico, ausente nas primeiras linhas de cada entidade")
+        alvo = (arq.get("alvo") or {}).get("coluna")
+        if alvo and alvo in df.columns:
+            linhas.append(f"  Alvo '{alvo}': min {df[alvo].min():.0f}, max {df[alvo].max():.0f}, "
+                          f"média {df[alvo].mean():.0f}")
+        linhas.append("")
+    return chr(10).join(linhas)
+
+
+def reconciliar_enunciado(txt: str, blocos: List[Dict[str, Any]], spec: Dict[str, Any], pasta: Path) -> str:
+    """Reescreve o trecho que descreve a base para bater com o que foi gerado.
+    Sem isto, enunciado e dados se contradizem — e a contradição é visível para
+    quem for resolver a prova."""
+    if not blocos:
+        return txt
+    inicio_desc = max(0, blocos[0]["inicio"] - 2000)
+    corte = txt.rfind(chr(10)*2, inicio_desc, blocos[0]["inicio"])
+    inicio_desc = corte + 2 if corte > 0 else inicio_desc
+    trecho = txt[inicio_desc:blocos[0]["inicio"]]
+    if len(trecho.strip()) < 80:
+        return txt
+    novo = _chat(None, MODEL_TURBO, system_prompt_reconciliacao(),
+                 user_prompt_reconciliacao(trecho, resumo_factual(spec, pasta))).strip()
+    novo = re.sub(r"^```[a-z]*" + chr(10) + r"|" + chr(10) + r"```$", "", novo).strip()
+    if len(novo) < 60:
+        print("  ⚠ reconciliação devolveu texto curto demais; trecho original mantido")
+        return txt
+    return txt[:inicio_desc] + novo + chr(10)*2 + txt[blocos[0]["inicio"]:]
 
 
 # =========================
@@ -897,9 +1140,18 @@ def main():
         print("[ERRO] Validação por código reprovou. TXT preservado.")
         sys.exit(4)
 
+    # Reconcilia ANTES de validar a semântica: comparar os dados novos com a
+    # descrição da base antiga reprovaria sempre, e pelo motivo errado.
+    print("[Fase 3.5] Reconciliando a descrição da base com os dados reais...")
+    txt_reconciliado = reconciliar_enunciado(txt, blocos, spec, destino)
+    if txt_reconciliado != txt:
+        print("  ✓ descrição atualizada (período, volume, granularidade e defeitos)")
+    else:
+        print("  ⚠ descrição não foi alterada")
+
     print("[Fase 4] Checagem semântica...")
     raw2 = _chat(None, MODEL_TURBO, system_prompt_semantica(),
-                 user_prompt_semantica(txt, resumir_para_llm(spec, destino)))
+                 user_prompt_semantica(txt_reconciliado, resumir_para_llm(spec, destino)))
     parsed = _parse_json_tolerante(raw2) or {"problemas": []}
     problemas, descartados = filtrar_autorrefutados(parsed.get("problemas") or [])
     if descartados:
@@ -914,12 +1166,18 @@ def main():
         print("  ✓ nenhum problema semântico.")
 
     if args.dry_run:
+        if txt_reconciliado != txt:
+            (projeto / "prova_pratica.reconciliada.preview.txt").write_text(txt_reconciliado, encoding="utf-8")
+            print("  → prévia da descrição reconciliada em prova_pratica.reconciliada.preview.txt")
         print("[4.7] --dry-run: TXT não alterado. Script e CSVs disponíveis para conferência.")
         _print_usage_summary()
         return
 
     print("[Fase 5] Atualizando a prova...")
     (projeto / "prova_pratica.pre_turbo.txt").write_text(txt, encoding="utf-8")
+    if txt_reconciliado != txt:
+        txt = txt_reconciliado
+        blocos = extrair_datasets(txt)  # os offsets mudaram com o texto novo
     novo = substituir_no_txt(txt, blocos, spec, destino)
     txt_path.write_text(novo, encoding="utf-8")
     print(f"  → backup em prova_pratica.pre_turbo.txt")
