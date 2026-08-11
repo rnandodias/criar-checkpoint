@@ -114,19 +114,48 @@ def _datasets_gerados(base: Path) -> list:
     return achados
 
 
-def _extrair_pendencias(relatorio_md: str) -> str:
-    """Extrai a seção 'Decisões pendentes' de um relatório de QA (.md).
+# Trechos que marcam material de correção dentro de um relatório: gabarito, equação
+# geradora dos dados, critérios de pontuação. Se algum aparecer, o relatório deixa de
+# ser "contexto" e passa a ser documento restrito, com aviso próprio nas instruções.
+_MARCAS_RESTRITO = ("uso interno", "não publicar", "nao publicar", "gabarito")
 
-    Captura o conteúdo a partir do primeiro cabeçalho '## ...' que contenha
-    'decis' e 'pendent' (case-insensitive) até o próximo '## ' ou o fim do arquivo.
-    Retorna '' se não houver seção de pendências.
+
+def _relatorio_restrito(relatorio_md: str) -> list:
+    """Devolve os títulos das seções de uso interno encontradas no relatório."""
+    achados = []
+    for ln in (relatorio_md or "").splitlines():
+        if ln.startswith("#") and any(m in ln.lower() for m in _MARCAS_RESTRITO):
+            achados.append(ln.lstrip("# ").strip())
+    return achados
+
+
+def _extrair_pendencias(relatorio_md: str) -> str:
+    """Extrai do relatório de QA (.md) a seção que descreve o que depende de decisão.
+
+    Casa tanto o título antigo ('Decisões pendentes') quanto os que descrevem uma ação
+    a tomar antes de publicar — o relatório mudou de formato quando passou a ser escrito
+    para o coordenador, e um casamento estrito faria a seção sumir das instruções sem
+    que ninguém percebesse.
     """
     if not relatorio_md:
         return ""
+
+    def _casa(ln: str) -> bool:
+        t = ln.lower()
+        if not ln.startswith("## "):
+            return False
+        if any(m in t for m in _MARCAS_RESTRITO):
+            return False  # seção de gabarito nunca vira "pendência para o coordenador"
+        return (("decis" in t and "pendent" in t)
+                or "pendent" in t
+                or "antes de publicar" in t
+                or "ação necessária" in t
+                or "acao necessaria" in t)
+
     linhas = relatorio_md.splitlines()
     inicio = None
     for i, ln in enumerate(linhas):
-        if ln.startswith("## ") and "decis" in ln.lower() and "pendent" in ln.lower():
+        if _casa(ln):
             inicio = i + 1
             break
     if inicio is None:
@@ -166,8 +195,14 @@ def montar_instrucoes(carreira: str, nivel: int, base: Path) -> str:
     pend_pratica = _extrair_pendencias(rel_pratica)
 
     is_cases, tem_datasets = _detectar_formato_pratica(pratica)
+    # Quando a etapa 4.7 turbina a base, o bloco CSV que sobra no enunciado é só uma
+    # amostra ilustrativa e o dado real vai por link. As duas situações exigem instruções
+    # opostas ao coordenador: numa ele edita os dados no texto, na outra não deve tocá-los.
+    dataset_por_link = MARCADOR_LINK_DATASET in pratica
     if is_cases:
         label_pratica = "prova prática (análise de cases por etapas)"
+    elif dataset_por_link:
+        label_pratica = "prova prática (projeto por etapas + base de dados por link)"
     elif tem_datasets:
         label_pratica = "prova prática (projeto por etapas + datasets)"
     else:
@@ -176,6 +211,14 @@ def montar_instrucoes(carreira: str, nivel: int, base: Path) -> str:
     rotulos = dict(ARQUIVOS_PACOTE)
     rotulos["prova_pratica.txt"] = label_pratica
     inclusos = [(n, rotulos[n]) for n, _r in ARQUIVOS_PACOTE if (base / n).exists()]
+    # A base e o gerador entram no ZIP mas não constam de ARQUIVOS_PACOTE; sem isto o
+    # sumário anuncia menos arquivos do que o pacote traz, e o CSV — que é justamente o
+    # que exige ação do coordenador — chega sem ter sido anunciado.
+    for csv_nome, csv_linhas in _datasets_gerados(base):
+        inclusos.append((f"dataset/{csv_nome}",
+                         f"base de dados ({csv_linhas} linhas) — precisa ser hospedada"))
+    if (base / "gerar_dataset.py").exists():
+        inclusos.append(("gerar_dataset.py", "script que gerou a base (não precisa executar)"))
 
     L = []
     L.append(SEP)
@@ -222,6 +265,15 @@ def montar_instrucoes(carreira: str, nivel: int, base: Path) -> str:
             "  (entregáveis documentais: pareceres, matrizes, diagramas). Não há código\n"
             "  nem datasets. Revise o conteúdo normalmente."
         )
+    elif dataset_por_link:
+        L.append(
+            "- prova_pratica.txt traz o enunciado do projeto por etapas. A base de dados\n"
+            "  NÃO está dentro do enunciado: o que aparece ali é a descrição das colunas e\n"
+            "  uma amostra de poucas linhas, apenas para a pessoa aluna conferir o formato.\n"
+            "  Os dados de verdade estão no arquivo da pasta dataset/, que precisa ser\n"
+            "  hospedado (veja a seção BASE DE DADOS mais abaixo). Revise o conteúdo\n"
+            "  normalmente."
+        )
     elif tem_datasets:
         L.append(
             "- prova_pratica.txt traz o enunciado do projeto por etapas e os datasets já\n"
@@ -236,7 +288,15 @@ def montar_instrucoes(carreira: str, nivel: int, base: Path) -> str:
         L.append("  Etapas:")
         for e in etapas:
             L.append(f"    - {e}")
-    if tem_datasets:
+    if dataset_por_link:
+        L.append(
+            "- Você PODE editar o corpo do texto diretamente no arquivo — enunciados, dicas\n"
+            "  e descrições — para corrigir o que precisar.\n"
+            "- NÃO edite a amostra de linhas nem a tabela de colunas da base: elas descrevem\n"
+            "  o arquivo que será baixado. Mexer ali faz o enunciado divergir dos dados\n"
+            "  reais, e é a primeira coisa que a pessoa aluna confere ao abrir o arquivo."
+        )
+    elif tem_datasets:
         L.append(
             "- Você PODE editar o corpo do texto diretamente no arquivo — enunciados, dicas,\n"
             "  descrições e os dados (blocos CSV) — para corrigir o que precisar."
@@ -294,9 +354,15 @@ def montar_instrucoes(carreira: str, nivel: int, base: Path) -> str:
         L.append("")
         L.append(
             "Sobre o arquivo gerar_dataset.py, também incluído: é o script que produziu\n"
-            "esses dados. Você NÃO precisa executá-lo — os CSVs já vêm prontos. Ele existe\n"
-            "para o caso de ser necessário regerar a base ou ajustar o volume no futuro.\n"
-            "A geração é determinística: rodar de novo produz exatamente os mesmos dados."
+            "esses dados. Você NÃO precisa executá-lo, e o normal é não executar — o(s)\n"
+            "CSV(s) deste pacote são o material CANÔNICO, o mesmo que a amostra do enunciado\n"
+            "descreve. O script existe para o caso de ser preciso regerar a base ou ajustar\n"
+            "o volume no futuro.\n"
+            "\n"
+            "ATENÇÃO se for regerar: a base nova sai estatisticamente equivalente, mas não\n"
+            "idêntica linha a linha. Nesse caso será preciso atualizar também a amostra e os\n"
+            "números citados no enunciado e no relatório, senão o texto passa a descrever\n"
+            "dados que não existem mais."
         )
         L.append("")
 
@@ -309,10 +375,29 @@ def montar_instrucoes(carreira: str, nivel: int, base: Path) -> str:
         L.append("RELATÓRIOS DE QA")
         L.append(SUB)
         L.append(
-            "Os relatórios (.md) detalham o que a revisão automática encontrou e o que já\n"
-            "foi corrigido em cada prova — servem de contexto. O que já está resolvido não\n"
-            "precisa ser revisto."
+            "Os relatórios (.md) detalham o que a revisão encontrou e o que já foi corrigido\n"
+            "em cada prova — servem de contexto. O que já está resolvido não precisa ser\n"
+            "revisto."
         )
+        restritas = sorted({s for nome in ("prova_pratica_relatorio.md", "prova_teorica_relatorio.md")
+                            for s in _relatorio_restrito(_ler(base, nome))})
+        if restritas:
+            L.append("")
+            L.append("  *** MATERIAL RESTRITO — NÃO ENVIAR À PESSOA ALUNA ***")
+            L.append("")
+            L.append(
+                "  O relatório contém seções destinadas a quem corrige, e não a quem resolve\n"
+                "  a prova:"
+            )
+            for s in restritas:
+                L.append(f"    - {s}")
+            L.append(
+                "\n"
+                "  São critérios de correção e, no caso da base de dados, a regra que gerou\n"
+                "  os números — em outras palavras, o gabarito. Se o material for compartilhado\n"
+                "  com monitoria, turma ou fórum, remova essas seções antes. Elas não aparecem\n"
+                "  em nenhum arquivo publicado: existem só neste pacote."
+            )
         L.append("")
     L.append(SEP)
     return "\n".join(L) + "\n"

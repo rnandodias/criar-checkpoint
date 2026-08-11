@@ -163,37 +163,14 @@ def _marcar_secao_como_prova(page: Page, course_id: int, nome_secao: str) -> Non
     checkbox 'É prova?' e salva.
 
     Idempotente: se o checkbox já está marcado, salva mesmo assim (sem efeito)."""
-    sections_url = f"https://cursos.alura.com.br/admin/courses/v2/{course_id}/sections"
-    print(f"  → GET {sections_url}")
-    page.goto(sections_url, wait_until="domcontentloaded", timeout=60_000)
+    # Resolve o id pelo nome EXATO e navega direto. Clicar no primeiro 'Editar' de uma
+    # linha que apenas CONTÉM o nome marcava a seção errada quando havia homônimas —
+    # foi assim que uma seção antiga acabou marcada como prova no curso 6503.
+    section_id = _section_id_por_nome(page, course_id, nome_secao)
+    edit_url = f"https://cursos.alura.com.br/admin/courses/v2/{course_id}/sections/{section_id}"
+    print(f"  → Abrindo a seção '{nome_secao}' (id={section_id}): {edit_url}")
+    page.goto(edit_url, wait_until="domcontentloaded", timeout=60_000)
     _settle(page, timeout=15_000)
-
-    print(f"  → Procurando linha da seção '{nome_secao}' e clicando em 'Editar'")
-    # Tenta múltiplas estruturas (tabela, lista, card)
-    candidatos_editar = [
-        f"tr:has-text('{nome_secao}') a:has-text('Editar')",
-        f"tr:has-text('{nome_secao}') button:has-text('Editar')",
-        f"li:has-text('{nome_secao}') a:has-text('Editar')",
-        f"*:has(> :text-is('{nome_secao}')) >> a:has-text('Editar')",
-        f"text='{nome_secao}' >> xpath=ancestor::*[self::tr or self::li or self::div][1] >> a:has-text('Editar')",
-    ]
-    clicked = False
-    for sel in candidatos_editar:
-        try:
-            page.click(sel, timeout=5_000)
-            clicked = True
-            break
-        except PWTimeoutError:
-            continue
-    if not clicked:
-        raise RuntimeError(
-            f"Botão 'Editar' da seção '{nome_secao}' não encontrado em {sections_url}. "
-            f"Testei: {candidatos_editar}"
-        )
-
-    # Espera a página de edição da seção carregar
-    _settle(page, timeout=15_000)
-    print(f"  → Em {page.url}")
 
     print(f"  → Marcando checkbox 'É prova?'")
     candidatos_checkbox = [
@@ -260,19 +237,39 @@ def _section_id_por_nome(page: Page, course_id: int, nome_secao: str) -> int:
     page.goto(sections_url, wait_until="domcontentloaded", timeout=60_000)
     _settle(page, timeout=15_000)
 
-    candidatos = [
-        f"tr:has-text('{nome_secao}') a:has-text('Editar')",
-        f"li:has-text('{nome_secao}') a:has-text('Editar')",
-        f"*:has(> :text-is('{nome_secao}')) >> a:has-text('Editar')",
-    ]
-    for sel in candidatos:
-        el = page.query_selector(sel)
-        if el:
-            href = el.get_attribute("href") or ""
-            m = re.search(r"/sections/(\d+)", href)
-            if m:
-                return int(m.group(1))
-    raise RuntimeError(f"section_id não encontrado para '{nome_secao}' em {sections_url}")
+    # Casamento EXATO e recusa em caso de ambiguidade.
+    #
+    # A versão anterior usava has-text (substring) e query_selector (primeiro resultado).
+    # Num curso que já tinha "Prova teórica (ANTIGO)", isso silenciosamente devolvia a
+    # seção antiga — e o conteúdo novo foi publicado no lugar errado sem nenhum aviso.
+    # Escolher sozinho entre candidatos é justamente o que não se pode fazer aqui: se há
+    # mais de uma seção com esse nome, quem decide é a pessoa que está operando.
+    achados = []  # (section_id, nome_exato)
+    for linha in page.query_selector_all("tr:has(a[href*='/sections/']), li:has(a[href*='/sections/'])"):
+        link = linha.query_selector("a[href*='/sections/']")
+        if not link:
+            continue
+        m = re.search(r"/sections/(\d+)", link.get_attribute("href") or "")
+        if not m:
+            continue
+        sid = int(m.group(1))
+        texto = (linha.inner_text() or "").replace("\t", "\n")
+        # o nome da seção é a primeira linha não numérica do bloco
+        nomes = [p.strip() for p in texto.splitlines() if p.strip()]
+        nome_exato = next((p for p in nomes if p and not p.isdigit()), "")
+        if nome_exato == nome_secao and not any(s == sid for s, _ in achados):
+            achados.append((sid, nome_exato))
+
+    if len(achados) == 1:
+        return achados[0][0]
+    if not achados:
+        raise RuntimeError(
+            f"Nenhuma seção com o nome EXATO '{nome_secao}' em {sections_url}. "
+            f"Confira o nome na plataforma — nomes parecidos não contam.")
+    raise RuntimeError(
+        f"{len(achados)} seções com o nome exato '{nome_secao}': "
+        + ", ".join(f"id={s}" for s, _ in achados)
+        + ". Renomeie ou remova as duplicadas antes de subir — o script não escolhe por você.")
 
 
 # Markdown padrão da atividade "Etapas do projeto" (única atividade da seção Apresentação)
