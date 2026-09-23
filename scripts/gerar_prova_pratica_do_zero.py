@@ -49,7 +49,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from dotenv import load_dotenv
 from openai import OpenAI
-from anthropic import Anthropic
+from anthropic import Anthropic, APIConnectionError, APIStatusError
 
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -542,6 +542,8 @@ def _accumulate_usage(usage: Dict[str, int]) -> None:
 
 
 _USE_BATCH = False  # ativado via flag CLI --batch (apenas Anthropic)
+# Falhas transitórias SEGUIDAS toleradas ao consultar um batch (40 × 30s ≈ 20 min sem conexão).
+BATCH_MAX_FALHAS_SEGUIDAS = 40
 
 
 def _anthropic_request_params(model: str, system: str, user: str) -> Dict[str, Any]:
@@ -556,20 +558,56 @@ def _anthropic_request_params(model: str, system: str, user: str) -> Dict[str, A
     return params
 
 
+def _erro_transitorio(e: Exception) -> bool:
+    """Queda de rede, timeout, 429 ou 5xx — vale esperar e tentar de novo."""
+    if isinstance(e, APIConnectionError):  # inclui APITimeoutError
+        return True
+    return isinstance(e, APIStatusError) and (e.status_code == 429 or e.status_code >= 500)
+
+
+def _com_retentativa(fn, descricao: str, espera: float):
+    """Executa fn() tolerando falhas transitórias. Usado só em operações idempotentes
+    (consultar status / ler resultados de um batch que segue rodando no servidor)."""
+    for tentativa in range(1, BATCH_MAX_FALHAS_SEGUIDAS + 1):
+        try:
+            return fn()
+        except Exception as e:
+            if not _erro_transitorio(e):
+                raise
+            if tentativa == BATCH_MAX_FALHAS_SEGUIDAS:
+                raise RuntimeError(
+                    f"{descricao}: {BATCH_MAX_FALHAS_SEGUIDAS} falhas seguidas ({type(e).__name__}). "
+                    "O batch continua no servidor e os resultados ficam disponíveis por 29 dias. "
+                    "Nenhuma chamada síncrona foi feita."
+                ) from e
+            print(f"[Batch] {descricao}: {type(e).__name__} "
+                  f"(falha {tentativa}/{BATCH_MAX_FALHAS_SEGUIDAS}) — nova tentativa em {espera:.0f}s")
+            time.sleep(espera)
+
+
 def _anthropic_batch_single(model: str, system: str, user: str, poll_interval: float = 30.0) -> str:
-    """Submete 1 request via Message Batches API (50% off) e bloqueia até concluir."""
+    """Submete 1 request via Message Batches API (50% off) e bloqueia até concluir.
+    NUNCA cai para chamada síncrona: queda de conexão no polling é tolerada (o batch segue no servidor)."""
     client = _get_anthropic_client()
     params = _anthropic_request_params(model, system, user)
     print(f"[Batch] Submetendo 1 request para {model}...")
     batch = client.messages.batches.create(requests=[{"custom_id": "pratica", "params": params}])
-    print(f"[Batch] ID: {batch.id} | aguardando processamento (poll a cada {poll_interval:.0f}s)...")
+    batch_id = batch.id
+    print(f"[Batch] ID: {batch_id} | aguardando processamento (poll a cada {poll_interval:.0f}s)...")
     while batch.processing_status != "ended":
         time.sleep(poll_interval)
-        batch = client.messages.batches.retrieve(batch.id)
+        batch = _com_retentativa(
+            lambda: client.messages.batches.retrieve(batch_id),
+            f"batch {batch_id}: consulta de status", poll_interval,
+        )
         rc = batch.request_counts
-        print(f"[Batch {batch.id[:16]}] proc={rc.processing} ok={rc.succeeded} err={rc.errored} cancel={rc.canceled} exp={rc.expired}")
+        print(f"[Batch {batch_id[:16]}] proc={rc.processing} ok={rc.succeeded} err={rc.errored} cancel={rc.canceled} exp={rc.expired}")
     print("[Batch] Concluído. Lendo resultado...")
-    for entry in client.messages.batches.results(batch.id):
+    entries = _com_retentativa(
+        lambda: list(client.messages.batches.results(batch_id)),
+        f"batch {batch_id}: leitura de resultados", poll_interval,
+    )
+    for entry in entries:
         if entry.result.type != "succeeded":
             raise RuntimeError(f"Batch falhou: {entry.result.type}")
         msg = entry.result.message

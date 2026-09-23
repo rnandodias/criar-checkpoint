@@ -24,7 +24,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from dotenv import load_dotenv
 from openai import OpenAI
-from anthropic import Anthropic
+from anthropic import Anthropic, APIConnectionError, APIStatusError
 
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -40,6 +40,8 @@ SINGLE_PASS_CHAR_LIMIT = 300000
 CHUNK_SIZE = 180000
 CHUNK_OVERLAP = 8000
 MAX_WORKERS = 4  # paralelismo por curso (ajuste se houver rate limit)
+# Falhas transitórias SEGUIDAS toleradas ao consultar um batch (40 × 15s ≈ 10 min sem conexão).
+BATCH_MAX_FALHAS_SEGUIDAS = 40
 
 # Alternativas (troque MODEL conforme necessidade):
 # MODEL = "claude-sonnet-4-6"  # ~30% do custo, ~70% do resultado
@@ -438,14 +440,44 @@ def _anthropic_messages_with_cache(
     return ""
 
 
+def _erro_transitorio(e: Exception) -> bool:
+    """Queda de rede, timeout, 429 ou 5xx — vale esperar e tentar de novo."""
+    if isinstance(e, APIConnectionError):  # inclui APITimeoutError
+        return True
+    return isinstance(e, APIStatusError) and (e.status_code == 429 or e.status_code >= 500)
+
+
+def _com_retentativa(fn, descricao: str, espera: float):
+    """Executa fn() tolerando falhas transitórias. Usado só em operações idempotentes
+    (consultar status / ler resultados de um batch que segue rodando no servidor)."""
+    for tentativa in range(1, BATCH_MAX_FALHAS_SEGUIDAS + 1):
+        try:
+            return fn()
+        except Exception as e:
+            if not _erro_transitorio(e):
+                raise
+            if tentativa == BATCH_MAX_FALHAS_SEGUIDAS:
+                raise RuntimeError(
+                    f"{descricao}: {BATCH_MAX_FALHAS_SEGUIDAS} falhas seguidas ({type(e).__name__}). "
+                    "O batch continua no servidor e os resultados ficam disponíveis por 29 dias. "
+                    "Nenhuma chamada síncrona foi feita."
+                ) from e
+            print(f"[Batch] {descricao}: {type(e).__name__} "
+                  f"(falha {tentativa}/{BATCH_MAX_FALHAS_SEGUIDAS}) — nova tentativa em {espera:.0f}s")
+            time.sleep(espera)
+
+
 def _anthropic_messages_batch(
     *, model: str,
     items: List[Tuple[str, str, str, str]],
     temperature: float = TEMPERATURE, max_tokens: int = 8192,
     poll_interval: float = 15.0,
+    reenvio: bool = False,
 ) -> Dict[str, str]:
     """Submete batch e bloqueia até concluir. items=[(custom_id, system_static, user_static, user_dynamic)].
-    Retorna {custom_id: text}. Errored/expired/canceled fazem retry sync."""
+    Retorna {custom_id: text}. NUNCA cai para chamada síncrona: queda de conexão no polling é
+    tolerada (o batch segue no servidor) e requests errored/expired são reenviados UMA vez em
+    novo batch; se falharem de novo, ficam com texto vazio e um aviso."""
     client = _get_anthropic_client()
     requests = []
     for custom_id, sys_s, user_s, user_d in items:
@@ -457,18 +489,26 @@ def _anthropic_messages_batch(
 
     print(f"[Batch] Submetendo {len(requests)} requests para {model}...")
     batch = client.messages.batches.create(requests=requests)
-    print(f"[Batch] ID: {batch.id} | aguardando processamento (poll a cada {poll_interval:.0f}s)...")
+    batch_id = batch.id
+    print(f"[Batch] ID: {batch_id} | aguardando processamento (poll a cada {poll_interval:.0f}s)...")
 
     while batch.processing_status != "ended":
         time.sleep(poll_interval)
-        batch = client.messages.batches.retrieve(batch.id)
+        batch = _com_retentativa(
+            lambda: client.messages.batches.retrieve(batch_id),
+            f"batch {batch_id}: consulta de status", poll_interval,
+        )
         rc = batch.request_counts
-        print(f"[Batch {batch.id[:16]}] proc={rc.processing} ok={rc.succeeded} err={rc.errored} cancel={rc.canceled} exp={rc.expired}")
+        print(f"[Batch {batch_id[:16]}] proc={rc.processing} ok={rc.succeeded} err={rc.errored} cancel={rc.canceled} exp={rc.expired}")
 
     print("[Batch] Concluído. Lendo resultados...")
+    entries = _com_retentativa(
+        lambda: list(client.messages.batches.results(batch_id)),
+        f"batch {batch_id}: leitura de resultados", poll_interval,
+    )
     results: Dict[str, str] = {}
     falhos: List[str] = []
-    for entry in client.messages.batches.results(batch.id):
+    for entry in entries:
         custom_id = entry.custom_id
         if entry.result.type == "succeeded":
             msg = entry.result.message
@@ -484,19 +524,17 @@ def _anthropic_messages_batch(
         else:
             falhos.append(custom_id)
 
-    if falhos:
-        print(f"[Batch] {len(falhos)} requests falharam. Retry síncrono...")
-        item_by_id = {it[0]: it for it in items}
+    if falhos and not reenvio:
+        print(f"[Batch] {len(falhos)} requests falharam no servidor. Reenviando em novo batch...")
+        results.update(_anthropic_messages_batch(
+            model=model, items=[it for it in items if it[0] in set(falhos)],
+            temperature=temperature, max_tokens=max_tokens,
+            poll_interval=poll_interval, reenvio=True,
+        ))
+    elif falhos:
+        print(f"[ATENÇÃO] {len(falhos)} requests falharam também no reenvio e ficaram sem resultado: {falhos}")
         for cid in falhos:
-            try:
-                _, sys_s, user_s, user_d = item_by_id[cid]
-                results[cid] = _anthropic_messages_with_cache(
-                    model=model, system_static=sys_s, user_static=user_s, user_dynamic=user_d,
-                    temperature=temperature, max_tokens=max_tokens,
-                )
-            except Exception as e:
-                print(f"[Batch] retry de {cid} falhou: {e}")
-                results[cid] = ""
+            results[cid] = ""
 
     return results
 
@@ -645,16 +683,13 @@ def summarize_course(course: Dict[str, Any], batch_mode: bool = True) -> Dict[st
 
     nome_curso = course.get("nome") or course.get("id")
 
-    use_batch = batch_mode and _provider_for(MODEL) == "anthropic" and len(transcricoes) >= 2
+    # Em modo batch não há fallback síncrono: se o batch falhar, a etapa aborta
+    # (sync só com --no-batch, decisão explícita do usuário).
+    use_batch = batch_mode and _provider_for(MODEL) == "anthropic"
     if use_batch:
         print(f"[Etapa 2] Curso '{nome_curso}' — {len(transcricoes)} vídeos via Anthropic Batch")
-        try:
-            results = summarize_videos_batch(transcricoes)
-        except Exception as e:
-            print(f"[Etapa 2] Batch falhou ({type(e).__name__}: {e}). Fallback para sync.")
-            use_batch = False
-
-    if not use_batch:
+        results = summarize_videos_batch(transcricoes)
+    else:
         # Paraleliza por vídeo para acelerar (modo sync)
         results = []
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:

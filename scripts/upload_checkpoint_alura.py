@@ -53,17 +53,18 @@ def _settle(page: Page, timeout: int = 15_000) -> None:
 
 
 def _login(page: Page, email: str, password: str) -> None:
-    # wait_until="domcontentloaded" evita esperar trackers/analytics que travam o "load"
-    page.goto("https://cursos.alura.com.br/loginForm", wait_until="domcontentloaded", timeout=60_000)
-    page.wait_for_selector("#login-email", timeout=20_000)
-    page.fill("#login-email", email)
-    page.fill("#password", password)
-    page.click("button:has-text('Entrar')")
+    # Tela nova (2026-09): /app/login é um app React. Se o clique acontecer antes da
+    # hidratação, o <form> nativo submete por GET com e-mail e senha NA URL — por isso
+    # esperamos a rede assentar e bloqueamos qualquer requisição com password na query.
+    page.route(re.compile(r".*[?&]password=.*"), lambda route: route.abort())
+    page.goto("https://cursos.alura.com.br/app/login", wait_until="networkidle", timeout=90_000)
+    page.wait_for_timeout(3_000)
+    page.locator('input[name="email"]').press_sequentially(email, delay=20)
+    page.locator('input[name="password"]').press_sequentially(password, delay=20)
+    page.get_by_role("button", name=re.compile("entrar", re.I)).first.click()
     try:
-        page.wait_for_url(
-            lambda url: "loginForm" not in url and "login" not in url.rstrip("/").split("/")[-1],
-            timeout=30_000,
-        )
+        page.wait_for_url(lambda url: "/login" not in url and "loginForm" not in url, timeout=45_000,
+                          wait_until="domcontentloaded")
         _settle(page, timeout=15_000)
     except PWTimeoutError as e:
         raise RuntimeError(
@@ -102,7 +103,8 @@ def _criar_uma_secao(page: Page, course_id: int, nome: str) -> str:
         )
 
     # Espera URL nova
-    page.wait_for_url(f"**/admin/courses/v2/{course_id}/newSection", timeout=15_000)
+    page.wait_for_url(f"**/admin/courses/v2/{course_id}/newSection", timeout=15_000,
+                      wait_until="domcontentloaded")
     _settle(page, timeout=15_000)
     print(f"  → Em {page.url}")
 
@@ -149,6 +151,7 @@ def _criar_uma_secao(page: Page, course_id: int, nome: str) -> str:
         page.wait_for_url(
             lambda url: "/newSection" not in url,
             timeout=20_000,
+            wait_until="domcontentloaded",
         )
     except PWTimeoutError:
         pass
