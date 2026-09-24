@@ -65,7 +65,36 @@ TEMP = 0.0
 # Alternativas:
 # MODEL_GEN = "claude-sonnet-4-6"  # ~30% do custo
 # MODEL_GEN = "gpt-5" / "gpt-4o-2024-08-06"
-SINGLE_PASS_CHAR_LIMIT = 300_000
+
+# NADA de insumo é cortado: todo conteúdo dos cursos é relevante. Até 2026-09 havia aqui um corte
+# silencioso em 300k chars que deixava os últimos cursos da trilha fora da prova (afetou 16 de 20
+# checkpoints). Este teto só existe para PARAR com mensagem clara quando o insumo não couber na
+# janela do modelo (Opus 4-6: 1M tokens; ~3,4 chars/token em PT-BR com JSON — a folga cobre o
+# system prompt e a saída). Quem opera decide o recorte.
+INSUMO_MAX_CHARS = 2_400_000
+# Teto de saída no batch (sem timeout HTTP); o síncrono fica em 16384. Resposta que bate no teto
+# está cortada — é tratada como erro, nunca aproveitada.
+MAX_TOKENS_BATCH = 32_000
+MAX_TOKENS_SYNC = 16_384
+
+
+def _exigir_insumo_completo(texto: str, descricao: str) -> None:
+    """Para a etapa se o insumo não couber no modelo. Nunca corta."""
+    if len(texto) > INSUMO_MAX_CHARS:
+        raise SystemExit(
+            f"[ABORTADO] {descricao}: {len(texto):,} chars, acima do teto seguro de "
+            f"{INSUMO_MAX_CHARS:,} para a janela do modelo. NADA foi cortado. Decida um recorte do "
+            "insumo (ex.: --resumos_arquivo com um resumos.json filtrado) e rode de novo."
+        )
+
+
+def _exigir_resposta_completa(stop_reason: Optional[str], max_tokens: int, origem: str) -> None:
+    """Resposta que parou no limite de max_tokens está cortada: erro, nunca aproveitada."""
+    if stop_reason == "max_tokens":
+        raise RuntimeError(
+            f"[ABORTADO] {origem}: a resposta atingiu max_tokens={max_tokens} e está CORTADA. "
+            "Nada foi aproveitado. Aumente o teto de saída (MAX_TOKENS_*) e rode de novo."
+        )
 
 OUTPUT_BASE = Path(__file__).resolve().parent.parent / "output"
 
@@ -546,10 +575,10 @@ _USE_BATCH = False  # ativado via flag CLI --batch (apenas Anthropic)
 BATCH_MAX_FALHAS_SEGUIDAS = 40
 
 
-def _anthropic_request_params(model: str, system: str, user: str) -> Dict[str, Any]:
+def _anthropic_request_params(model: str, system: str, user: str, max_tokens: int = MAX_TOKENS_SYNC) -> Dict[str, Any]:
     params: Dict[str, Any] = {
         "model": model,
-        "max_tokens": 16384,
+        "max_tokens": max_tokens,
         "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
         "messages": [{"role": "user", "content": user}],
     }
@@ -589,7 +618,7 @@ def _anthropic_batch_single(model: str, system: str, user: str, poll_interval: f
     """Submete 1 request via Message Batches API (50% off) e bloqueia até concluir.
     NUNCA cai para chamada síncrona: queda de conexão no polling é tolerada (o batch segue no servidor)."""
     client = _get_anthropic_client()
-    params = _anthropic_request_params(model, system, user)
+    params = _anthropic_request_params(model, system, user, max_tokens=MAX_TOKENS_BATCH)
     print(f"[Batch] Submetendo 1 request para {model}...")
     batch = client.messages.batches.create(requests=[{"custom_id": "pratica", "params": params}])
     batch_id = batch.id
@@ -618,6 +647,7 @@ def _anthropic_batch_single(model: str, system: str, user: str, poll_interval: f
             "input_tokens": msg.usage.input_tokens,
             "output_tokens": msg.usage.output_tokens,
         })
+        _exigir_resposta_completa(msg.stop_reason, MAX_TOKENS_BATCH, f"batch {batch_id}")
         return text
     raise RuntimeError("Batch concluiu sem resultados.")
 
@@ -637,6 +667,7 @@ def _chat(client: Any, model: str, system: str, user: str) -> str:
             "input_tokens": resp.usage.input_tokens,
             "output_tokens": resp.usage.output_tokens,
         })
+        _exigir_resposta_completa(resp.stop_reason, kwargs_a["max_tokens"], "chamada síncrona")
         return text
     kwargs: Dict[str, Any] = {
         "model": model,
@@ -645,6 +676,8 @@ def _chat(client: Any, model: str, system: str, user: str) -> str:
     if _model_supports_temperature(model):
         kwargs["temperature"] = TEMP
     resp = _get_openai_client().chat.completions.create(**kwargs)
+    if resp.choices[0].finish_reason == "length":
+        _exigir_resposta_completa("max_tokens", 0, "chamada OpenAI")
     return resp.choices[0].message.content or ""
 
 
@@ -1041,8 +1074,8 @@ def gerar_aula3_txt(
     resumos = _load_resumos_via_cli(resumos_arquivo, nivel, carreira)
     ferramentas = _derivar_ferramentas_permitidas(resumos, ferramentas_cli)
     resumos_json = json.dumps(_resumos_compactos(resumos), ensure_ascii=False)
-    if len(resumos_json) > SINGLE_PASS_CHAR_LIMIT:
-        resumos_json = resumos_json[:SINGLE_PASS_CHAR_LIMIT]
+    _exigir_insumo_completo(resumos_json, "Resumos do nível (insumo da prova prática)")
+    print(f"  → Insumo: {len(resumos)} cursos, {len(resumos_json):,} chars (completo, sem corte)")
     if not domains:
         domains = DOMAINS_DEFAULT
     domains_list_formatada = "\n".join([f"- {d}" for d in domains])

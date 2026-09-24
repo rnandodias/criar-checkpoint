@@ -62,9 +62,18 @@ TEMPERATURE_RANK = 0.0
 # MODEL_IDEAS = MODEL_FORMAT = "gpt-5" / "gpt-4o" / "claude-opus-4-7"
 # MODEL_RANK = "gpt-4o-mini"
 
-SINGLE_PASS_CHAR_LIMIT = 300_000
+# NADA de insumo é cortado (todo conteúdo dos cursos é relevante). O teto só existe para PARAR com
+# mensagem clara se o texto de um curso não couber na janela do modelo (Opus 4-6: 1M tokens).
+INSUMO_MAX_CHARS = 2_400_000
+# Resposta que bate no max_tokens está cortada: no batch é reenviada com o dobro do teto (até este
+# limite); no síncrono, é erro. Nunca é aproveitada.
+MAX_TOKENS_TETO_BATCH = 32_768
 # Falhas transitórias SEGUIDAS toleradas ao consultar um batch (40 × 15s ≈ 10 min sem conexão).
 BATCH_MAX_FALHAS_SEGUIDAS = 40
+
+
+class RespostaCortada(RuntimeError):
+    """A resposta atingiu max_tokens — está incompleta e não pode ser aproveitada."""
 
 INPUT_DIR = Path(__file__).resolve().parent.parent / "output" / "checkpoints"
 OUTPUT_BASE = Path(__file__).resolve().parent.parent / "output"
@@ -435,7 +444,14 @@ def _anthropic_messages_with_cache(
                 "input_tokens": resp.usage.input_tokens,
                 "output_tokens": resp.usage.output_tokens,
             })
+            if resp.stop_reason == "max_tokens":
+                raise RespostaCortada(
+                    f"[ABORTADO] resposta síncrona atingiu max_tokens={max_tokens} e está CORTADA. "
+                    "Nada foi aproveitado — aumente o max_tokens desta chamada."
+                )
             return text
+        except RespostaCortada:
+            raise
         except Exception as e:
             if attempt == retries - 1:
                 raise
@@ -513,6 +529,7 @@ def _anthropic_messages_batch(
     )
     results: Dict[str, str] = {}
     falhos: List[str] = []
+    cortados: List[str] = []
     for entry in entries:
         custom_id = entry.custom_id
         if entry.result.type == "succeeded":
@@ -524,9 +541,26 @@ def _anthropic_messages_batch(
                 "input_tokens": msg.usage.input_tokens,
                 "output_tokens": msg.usage.output_tokens,
             })
-            results[custom_id] = text
+            if msg.stop_reason == "max_tokens":
+                cortados.append(custom_id)
+            else:
+                results[custom_id] = text
         else:
             falhos.append(custom_id)
+
+    if cortados:
+        if max_tokens * 2 > MAX_TOKENS_TETO_BATCH:
+            raise RespostaCortada(
+                f"[ABORTADO] {len(cortados)} respostas CORTADAS mesmo com max_tokens={max_tokens}: "
+                f"{cortados}. Nada foi aproveitado delas (batch {batch_id}; resultados no servidor por 29 dias)."
+            )
+        print(f"[Batch] {len(cortados)} respostas atingiram max_tokens={max_tokens} (estariam cortadas). "
+              f"Reenviando com max_tokens={max_tokens * 2}...")
+        results.update(_anthropic_messages_batch(
+            model=model, items=[it for it in items if it[0] in set(cortados)],
+            temperature=temperature, max_tokens=max_tokens * 2,
+            poll_interval=poll_interval, reenvio=reenvio,
+        ))
 
     if falhos and not reenvio:
         print(f"[Batch] {len(falhos)} requests falharam no servidor. Reenviando em novo batch...")
@@ -561,6 +595,8 @@ def _chat(client: Any, model: str, system: str, user_static: str, user_dynamic: 
     if _model_supports_temperature(model):
         kwargs["temperature"] = temperature
     resp = _get_openai_client().chat.completions.create(**kwargs)
+    if resp.choices[0].finish_reason == "length":
+        raise RespostaCortada("[ABORTADO] resposta OpenAI cortada pelo limite de saída. Nada foi aproveitado.")
     return resp.choices[0].message.content or ""
 
 
@@ -646,8 +682,11 @@ def resumo_to_transcription_text(course: Dict[str, Any]) -> str:
         lines.append(f"Ferramentas usadas no curso: {', '.join(ferramentas)}")
 
     text = "\n".join(lines)
-    if len(text) > SINGLE_PASS_CHAR_LIMIT:
-        text = text[:SINGLE_PASS_CHAR_LIMIT]
+    if len(text) > INSUMO_MAX_CHARS:
+        raise SystemExit(
+            f"[ABORTADO] Resumo do curso {course.get('id')} tem {len(text):,} chars, acima do teto "
+            f"seguro de {INSUMO_MAX_CHARS:,} para a janela do modelo. NADA foi cortado — decida um recorte."
+        )
     return text
 
 # =========================

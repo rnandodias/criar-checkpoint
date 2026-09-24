@@ -42,6 +42,13 @@ CHUNK_OVERLAP = 8000
 MAX_WORKERS = 4  # paralelismo por curso (ajuste se houver rate limit)
 # Falhas transitórias SEGUIDAS toleradas ao consultar um batch (40 × 15s ≈ 10 min sem conexão).
 BATCH_MAX_FALHAS_SEGUIDAS = 40
+# Resposta que bate no max_tokens está cortada (resumo de aula incompleto): no batch é reenviada
+# com o dobro do teto (até este limite); no síncrono, é erro. Nunca é aproveitada.
+MAX_TOKENS_TETO_BATCH = 32_768
+
+
+class RespostaCortada(RuntimeError):
+    """A resposta atingiu max_tokens — está incompleta e não pode ser aproveitada."""
 
 # Alternativas (troque MODEL conforme necessidade):
 # MODEL = "claude-sonnet-4-6"  # ~30% do custo, ~70% do resultado
@@ -429,7 +436,14 @@ def _anthropic_messages_with_cache(
                 "output_tokens": resp.usage.output_tokens,
             }
             _accumulate_usage(usage)
+            if resp.stop_reason == "max_tokens":
+                raise RespostaCortada(
+                    f"[ABORTADO] resposta síncrona atingiu max_tokens={max_tokens} e está CORTADA. "
+                    "Nada foi aproveitado — aumente o max_tokens desta chamada."
+                )
             return text
+        except RespostaCortada:
+            raise
         except Exception as e:
             if attempt == retries - 1:
                 print(f"[ERRO] anthropic_messages falhou após {retries}: {type(e).__name__}: {e}")
@@ -508,6 +522,7 @@ def _anthropic_messages_batch(
     )
     results: Dict[str, str] = {}
     falhos: List[str] = []
+    cortados: List[str] = []
     for entry in entries:
         custom_id = entry.custom_id
         if entry.result.type == "succeeded":
@@ -520,9 +535,26 @@ def _anthropic_messages_batch(
                 "output_tokens": msg.usage.output_tokens,
             }
             _accumulate_usage(usage)
-            results[custom_id] = text
+            if msg.stop_reason == "max_tokens":
+                cortados.append(custom_id)
+            else:
+                results[custom_id] = text
         else:
             falhos.append(custom_id)
+
+    if cortados:
+        if max_tokens * 2 > MAX_TOKENS_TETO_BATCH:
+            raise RespostaCortada(
+                f"[ABORTADO] {len(cortados)} respostas CORTADAS mesmo com max_tokens={max_tokens}: "
+                f"{cortados}. Nada foi aproveitado delas (batch {batch_id}; resultados no servidor por 29 dias)."
+            )
+        print(f"[Batch] {len(cortados)} respostas atingiram max_tokens={max_tokens} (estariam cortadas). "
+              f"Reenviando com max_tokens={max_tokens * 2}...")
+        results.update(_anthropic_messages_batch(
+            model=model, items=[it for it in items if it[0] in set(cortados)],
+            temperature=temperature, max_tokens=max_tokens * 2,
+            poll_interval=poll_interval, reenvio=reenvio,
+        ))
 
     if falhos and not reenvio:
         print(f"[Batch] {len(falhos)} requests falharam no servidor. Reenviando em novo batch...")
@@ -565,7 +597,11 @@ def call_chat(messages: List[Dict[str, str]], *, retries: int = 3, backoff: floa
             if _model_supports_temperature(MODEL):
                 kwargs["temperature"] = TEMPERATURE
             resp = _get_openai_client().chat.completions.create(**kwargs)
+            if resp.choices[0].finish_reason == "length":
+                raise RespostaCortada("[ABORTADO] resposta OpenAI cortada pelo limite de saída. Nada foi aproveitado.")
             return resp.choices[0].message.content or ""
+        except RespostaCortada:
+            raise
         except Exception as e:
             if attempt == retries - 1:
                 print(f"[ERRO] call_chat falhou após {retries}: {type(e).__name__}: {e}")

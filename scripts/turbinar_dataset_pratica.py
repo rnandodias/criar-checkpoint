@@ -275,7 +275,7 @@ def user_prompt_especificacao(enunciado: str, blocos: List[Dict[str, Any]], txt:
         "",
         "ENUNCIADO DA PROVA (contexto do cenário):",
         "```",
-        enunciado[:14000],
+        enunciado,
         "```",
         "",
         f"DATASET(S) DE EXEMPLO ESCRITOS NA PROVA ({len(blocos)}):",
@@ -291,7 +291,7 @@ def user_prompt_especificacao(enunciado: str, blocos: List[Dict[str, Any]], txt:
             "```",
             "Conteúdo do bloco:",
             "```",
-            b["conteudo"][:3000],
+            b["conteudo"],
             "```",
         ]
     partes += ["", "Retorne SOMENTE o JSON da especificação."]
@@ -1470,12 +1470,12 @@ Schema:
 def user_prompt_semantica(enunciado: str, resumos_csv: str) -> str:
     return f"""ENUNCIADO DA PROVA (define o cenário):
 ```
-{enunciado[:12000]}
+{enunciado}
 ```
 
 DATASET GERADO — estatísticas e amostra de cada arquivo:
 ```
-{resumos_csv[:12000]}
+{resumos_csv}
 ```
 
 Retorne SOMENTE o JSON.
@@ -1509,9 +1509,9 @@ def resumir_para_llm(spec: Dict[str, Any], pasta: Path) -> str:
         df = pd.read_csv(caminho)
         partes.append(f"=== {arq['nome']} ({len(df)} linhas) ===")
         partes.append("Estatísticas:")
-        partes.append(df.describe(include="all").to_string()[:2500])
+        partes.append(df.describe(include="all").to_string())
         partes.append(f"Amostra ({LINHAS_AMOSTRA} linhas):")
-        partes.append(df.head(LINHAS_AMOSTRA).to_string()[:2000])
+        partes.append(df.head(LINHAS_AMOSTRA).to_string())
         partes.append("")
     return "\n".join(partes)
 
@@ -1602,7 +1602,7 @@ def user_prompt_mencoes(txt: str, resumo_real: str) -> str:
 
 ENUNCIADO COMPLETO DA PROVA:
 ```
-{txt[:24000]}
+{txt}
 ```
 
 Localize as menções à base que ficaram falsas e devolva as substituições."""

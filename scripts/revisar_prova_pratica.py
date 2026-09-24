@@ -45,7 +45,7 @@ from gerar_prova_pratica_do_zero import (  # noqa: E402
     _derivar_ferramentas_permitidas,
     _resumos_compactos,
     OUTPUT_BASE,
-    SINGLE_PASS_CHAR_LIMIT,
+    _exigir_insumo_completo,
 )
 from upload_checkpoint_alura import _parse_prova_pratica, SECOES_PRATICA_ORDER  # noqa: E402
 
@@ -341,7 +341,7 @@ Ferramentas permitidas (não invente novas):
 
 RESUMOS DOS CURSOS (aderência):
 ```json
-{resumos_json[:80000]}
+{resumos_json}
 ```
 
 Reescreva SOMENTE o conteúdo desta seção. Não inclua o header `## ...` — ele será preservado externamente.
@@ -556,8 +556,7 @@ def main():
         envolve_dados = _carreira_envolve_dados(args.carreira, ferramentas, resumos)
 
     resumos_json = json.dumps(_resumos_compactos(resumos), ensure_ascii=False)
-    if len(resumos_json) > SINGLE_PASS_CHAR_LIMIT:
-        resumos_json = resumos_json[:SINGLE_PASS_CHAR_LIMIT]
+    _exigir_insumo_completo(resumos_json, "Resumos do nível (insumo do revisor)")
 
     txt = txt_path.read_text(encoding="utf-8")
     secoes = _parse_prova_pratica(txt)
