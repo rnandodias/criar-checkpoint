@@ -142,9 +142,23 @@ marcador `[INSERIR AQUI O LINK DE DOWNLOAD]` deixado na prova — assim quem nã
 na geração. O `empacotar_para_coordenador.py` detecta a pasta `dataset/`, inclui os CSVs e o script no
 ZIP, e acrescenta às instruções a seção explicando o procedimento.
 
-**PENDENTE:** o enunciado ainda descreve o dataset antigo ("~100 linhas", "8 valores ausentes",
-"3 outliers acima de 950"). Ao crescer a base, essas menções ficam falsas e a checagem semântica
-reprova — corretamente. Falta a fase que reescreve essas quantidades no texto.
+As menções ao dataset antigo no enunciado ("100 registros") são reescritas pelas fases 3.5
+(seção que descreve a base) e 3.6 (tarefas e dicas) — conferido em Ciência de Dados v2 n2.
+
+**Fluxo obrigatório: `--dry-run` → conferir → `--usar-spec`.** Toda execução grava a especificação
+em `dataset_spec.json`. Sem `--usar-spec`, a execução real pede OUTRA especificação ao LLM e gera
+uma base diferente da conferida. Detalhe de domínio errado (ex.: um modelo de texto "entrega
+noturna" numa regra que cobre qualquer horário) se corrige no `dataset_spec.json` antes de aplicar.
+Para refazer depois de aplicado, restaure `prova_pratica.pre_turbo.txt` sobre `prova_pratica.txt`.
+
+**Vocabulário da spec (2026-11, Ciência de Dados v2 n2):** efeito por categoria (`efeitos`), efeito
+não linear por `faixas`, `interacao` com `fatores`, coluna `condicionada_a` outra (peso conforme o
+veículo), coluna `texto` gerada por regras condicionadas (valor, lista ou faixa — inclusive o alvo,
+se a coluna for `auxiliar`), janela `hora_min`/`hora_max` em datetime, rótulos de dia/mês em
+derivadas. A Fase 1.5 **reprova** o que o gerador não executaria (antes ignorava em silêncio); o
+validador confere ordem/força dos efeitos por categoria e faixa e reprova alvo separável por regra
+de uma coluna. Coerência texto × linha (horário citado no texto) NÃO é checada por código —
+confira na amostra.
 
 ## Regra de operação (assistentes): parâmetros são decisão do usuário
 

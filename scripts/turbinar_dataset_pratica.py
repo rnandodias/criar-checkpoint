@@ -205,6 +205,50 @@ REGRAS:
   use "lag_7" (ou maior). Um lag_1 só se justifica quando a decisão é tomada no próprio dia. Prefira
   "lag_7" quando o enunciado falar em planejamento, escala ou dimensionamento.
 
+- **COMO O CÓDIGO LÊ A FÓRMULA DO ALVO (leia antes de escrever).** O código só executa o que está
+  nos campos estruturados abaixo. O campo "condicao" é apenas descritivo: o código NÃO o lê. Um efeito
+  escrito só em "condicao" (ou num campo que não está no schema) é ignorado, e o fator sai sem efeito.
+  * "coluna": efeito linear de uma coluna numérica (inclusive 0/1): coeficiente × valor.
+  * "categoria": um efeito para cada valor, em "efeitos" — {"centro": -0.5, "zona_leste": 0.4, ...}.
+    Valores não listados recebem 0. Use os mesmos valores que a coluna tem.
+  * "faixas": efeito não linear de uma coluna numérica (horário de pico, faixa etária), em "faixas" —
+    [{"min": 16, "max": 19, "efeito": 0.6}, ...]. Os limites são inclusivos.
+  * "interacao": o efeito de uma variável depende de outra (chuva pesa mais em trajeto longo). Declare
+    os dois "fatores": cada fator é uma coluna numérica (usa o valor) ou um indicador, quando traz
+    "valores" (1 se o valor da linha está na lista) ou "min"/"max" (1 se está na faixa).
+  * "constante": o intercepto.
+  A ESCALA dos efeitos é dada pela "importancia" — o código normaliza cada efeito e o reescala por ela.
+  Os números de "efeitos", "faixas" e "coeficiente" definem a FORMA e o SINAL da relação.
+
+- **DISTRIBUIÇÃO QUE DEPENDE DE OUTRA COLUNA.** Se os valores de uma coluna dependem de outra (peso
+  conforme o veículo, distância conforme a região, renda conforme a escolaridade), declare
+  "condicionada_a" com uma variante de parâmetros (ou de categorias) para cada valor da coluna de
+  referência. Sem isso a coluna é sorteada independente — moto carregando 50 kg.
+
+- **TEXTO LIVRE.** Coluna de texto (relato, observação, comentário) tem "tipo": "texto" e o campo
+  "textos" com regras em ordem: a primeira regra cuja condição "quando" casa com a linha escolhe um
+  dos "modelos". A última regra deve ter "quando": {} (padrão). Dê pelo menos 8 modelos por regra,
+  variados no vocabulário e no detalhe — a base vai alimentar buscas e análises de texto, e meia dúzia
+  de frases repetidas milhares de vezes não sustenta isso. Os modelos podem citar valores da linha com
+  {nome_da_coluna}. Um modelo só pode afirmar o que a condição da sua regra garante: "entrega
+  noturna" numa regra que cobre qualquer horário contradiz a linha em que cair — quem ler a base vê
+  um relato noturno às seis da manhã. Detalhe que depende de outra coluna vai na condição ou no
+  marcador {coluna}. A condição aceita valor exato ({"chuva": 1}), lista ({"dia_semana": ["sabado",
+  "domingo"]}) ou faixa ({"hora_despacho": {"min": 18}}). Frase que cita momento do dia ("primeira
+  entrega", "fim da tarde", "noturna") ou dia da semana ("fim de semana") só entra em regra com essa
+  condição — numa regra genérica ela cai em qualquer horário. Se o texto é escrito DEPOIS do evento que o alvo mede (relato de entrega, laudo,
+  resultado), ele pode depender do alvo, mas então é "papel": "auxiliar" — nunca "feature".
+
+- **COLUNAS BINÁRIAS (0/1)** usam "tipo": "int" e "categorias": [{"valor": 0, "peso": ...}, {"valor": 1,
+  "peso": ...}]. Coluna categórica sem "categorias" não pode ser gerada.
+
+- **DATA E HORA.** Se as ocorrências só acontecem numa janela do dia (expediente, horário comercial),
+  declare "hora_min" e "hora_max" nos parâmetros da coluna datetime. Coluna derivada com rótulo (dia da
+  semana por extenso, nome do mês) lista os rótulos em "categorias" NA ORDEM DO CALENDÁRIO (segunda a
+  domingo; janeiro a dezembro) — o código converte o número no rótulo.
+
+- **LOGNORMAL**: "media" e "desvio" na escala da própria coluna (kg, km, R$), não do logaritmo.
+
 REGRAS DE SAÍDA (invioláveis):
 1. Responda APENAS com UM objeto JSON válido. Sem texto antes ou depois, sem crases de markdown.
 2. Primeiro caractere `{`, último `}`.
@@ -223,10 +267,12 @@ Schema:
       "colunas": [
         {
           "nome": "<nome>",
-          "tipo": "<int|float|categoria|data|datetime|bool|id>",
+          "tipo": "<int|float|categoria|texto|data|datetime|bool|id>",
           "descricao": "<significado, 1 frase>",
           "distribuicao": "<uniforme|normal|lognormal|poisson|categorica|sequencial — 'sequencial' SÓ para identificador/chave primária, nunca para uma feature>",
-          "parametros": {"min": <n>, "max": <n>, "media": <n>, "desvio": <n>, "lambda": <n>, "inicio": "<YYYY-MM-DD>", "fim": "<YYYY-MM-DD>"},
+          "parametros": {"min": <n>, "max": <n>, "media": <n>, "desvio": <n>, "lambda": <n>, "inicio": "<YYYY-MM-DD>", "fim": "<YYYY-MM-DD>", "hora_min": <0-23, só datetime>, "hora_max": <0-23, só datetime>} — valores simples apenas, nada aninhado,
+          "condicionada_a": {"coluna": "<coluna de referência>", "variantes": {"<valor da referência>": {"parametros": {...}, "categorias": [...]}}} ou null,
+          "textos": {"regras": [{"quando": {"<coluna>": <valor exato> ou {"min": <n>, "max": <n>}}, "modelos": ["<frase>", "..."]}, {"quando": {}, "modelos": ["..."]}]} ou null — só para tipo "texto",
           "categorias": [{"valor": "<v>", "peso": <0-1>}],
           "decimais": <inteiro>,
           "papel": "<feature|alvo|identificador|temporal|auxiliar>",
@@ -241,7 +287,7 @@ Schema:
         "coluna": "<nome da coluna alvo|null>",
         "tipo_tarefa": "<regressao|classificacao|null>",
         "formula": [
-          {"termo": "<constante|coluna|categoria|temporal|interacao>", "coluna": "<nome ou null>", "coeficiente": <n>, "importancia": <1-5, quão determinante este fator é no mundo real>, "condicao": "<descrição da condição, ou null>", "explicacao": "<por que esta relação existe no domínio, em 1 frase>"}
+          {"termo": "<constante|coluna|categoria|faixas|interacao|temporal (só sobre coluna de data: tendência)>", "coluna": "<nome ou null>", "coeficiente": <n — em constante, coluna, interacao e temporal>, "efeitos": {"<valor>": <n>} (obrigatório em categoria), "faixas": [{"min": <n>, "max": <n>, "efeito": <n>}] (obrigatório em faixas), "fatores": [{"coluna": "<col>", "valores": [<v>] ou null, "min": <n|null>, "max": <n|null>}, {...}] (obrigatório em interacao), "importancia": <1-5, quão determinante este fator é no mundo real>, "condicao": "<só descritivo — o código não lê>", "explicacao": "<por que esta relação existe no domínio, em 1 frase>"}
         ],
         "ruido_fracao": <0.2-0.5 — quanto do desvio do sinal vira ruído; use 0.35 salvo motivo>,
         "limiar_classificacao": <n ou null>,
@@ -387,18 +433,139 @@ def normalizar_spec(spec: Dict[str, Any], linhas_alvo: int) -> Tuple[List[str], 
         # costuma aparecer uma vez por categoria, e um coeficiente zero ali é a categoria
         # neutra — perfeitamente legítimo. Só há contradição quando a coluna inteira soma
         # efeito nulo apesar de declarada como determinante.
+        # --- o que a especificação pede tem de ser executável ---
+        # Tudo o que o gerador não sabe executar ele ignora — e ignorar em silêncio produz
+        # uma base que contradiz a especificação sem que ninguém perceba. Aqui o que não
+        # cabe no vocabulário é convertido (quando a intenção é inequívoca) ou reprovado.
+        colunas = arq.get("colunas") or []
+        por_nome = {c["nome"]: c for c in colunas}
+        alvo_nome = (arq.get("alvo") or {}).get("coluna")
+        for col in colunas:
+            nm = col["nome"]
+            p = col.get("parametros") or {}
+            aninhados = [k for k, v in p.items() if isinstance(v, (dict, list))]
+            if aninhados:
+                erros.append(
+                    f"{nome}.{nm}: parâmetro(s) {aninhados} fora do vocabulário (valores aninhados). "
+                    f"Uma distribuição que depende de outra coluna se declara em 'condicionada_a'; "
+                    f"do contrário o gerador ignora a dependência.")
+            cond = col.get("condicionada_a") or {}
+            if cond:
+                if cond.get("coluna") not in por_nome:
+                    erros.append(f"{nome}.{nm}: condicionada a '{cond.get('coluna')}', que não existe")
+                elif not cond.get("variantes"):
+                    erros.append(f"{nome}.{nm}: 'condicionada_a' sem variantes")
+                else:
+                    ref = por_nome[cond["coluna"]]
+                    valores_ref = {str(c.get("valor")) for c in (ref.get("categorias") or [])}
+                    sem = sorted(valores_ref - {str(k) for k in cond["variantes"]})
+                    if sem:
+                        avisos.append(f"{nome}.{nm}: sem variante para {sem} de '{cond['coluna']}' — "
+                                      f"esses valores usam os parâmetros-base da coluna")
+            tipo_c = (col.get("tipo") or "").lower()
+            if tipo_c == "texto":
+                regras = (col.get("textos") or {}).get("regras") or []
+                if not any(r.get("modelos") for r in regras):
+                    erros.append(f"{nome}.{nm}: coluna de texto sem regras/modelos em 'textos'")
+                    continue
+                usadas = {k for r in regras for k in (r.get("quando") or {})}
+                inexistentes = sorted(usadas - set(por_nome))
+                if inexistentes:
+                    erros.append(f"{nome}.{nm}: regras de texto citam colunas inexistentes {inexistentes}")
+                if not any(not (r.get("quando") or {}) for r in regras):
+                    avisos.append(f"{nome}.{nm}: nenhuma regra padrão (quando vazio) — linhas que não "
+                                  f"casarem com nenhuma regra ficam sem texto")
+                if alvo_nome in usadas:
+                    if (col.get("papel") or "").lower() == "feature":
+                        erros.append(
+                            f"{nome}.{nm}: o texto é gerado a partir do alvo '{alvo_nome}' e está "
+                            f"marcado como feature — vazamento de dados. Texto escrito depois do evento "
+                            f"é 'auxiliar'.")
+                    else:
+                        avisos.append(f"{nome}.{nm}: texto depende do alvo (registrado após o evento) — "
+                                      f"a prova precisa excluí-lo das features")
+                continue
+            categorica = tipo_c == "categoria" or (col.get("distribuicao") or "").lower() == "categorica"
+            variantes = (cond.get("variantes") or {}).values() if cond else []
+            cats_nas_variantes = bool(variantes) and all(v.get("categorias") for v in variantes)
+            if categorica and not col.get("categorias") and not col.get("derivada_de") \
+                    and not cats_nas_variantes and nm != alvo_nome:
+                erros.append(f"{nome}.{nm}: coluna categórica sem 'categorias' — sairia 'NA' em todas "
+                             f"as linhas")
+
         alvo = arq.get("alvo") or {}
+        tipos_termo = {"constante", "coluna", "categoria", "faixas", "interacao", "temporal"}
+        for termo in list(alvo.get("formula") or []):
+            kind = (termo.get("termo") or "").lower()
+            col = termo.get("coluna")
+            # Formatos que o modelo costuma usar e cuja intenção é inequívoca: converte.
+            if kind == "interacao" and not termo.get("fatores") and col and "*" in str(col):
+                partes = [x.strip() for x in str(col).split("*")]
+                if all(x in por_nome for x in partes):
+                    termo["fatores"] = [{"coluna": x} for x in partes]
+                    avisos.append(f"{nome}: interação '{col}' convertida em fatores {partes}")
+            if kind == "categoria" and not termo.get("efeitos") and termo.get("condicao"):
+                pares = re.findall(r"([^\s:,;]+)\s*:\s*([-+]?\d+(?:[.,]\d+)?)", str(termo["condicao"]))
+                if pares:
+                    termo["efeitos"] = {k: float(v.replace(",", ".")) for k, v in pares}
+                    avisos.append(f"{nome}.{col}: efeitos por categoria lidos de 'condicao' "
+                                  f"({len(pares)} valores)")
+            if kind not in tipos_termo:
+                erros.append(f"{nome}: termo '{kind}' fora do vocabulário — o gerador o trataria como "
+                             f"efeito linear")
+                continue
+            if kind == "interacao":
+                fat = termo.get("fatores") or []
+                if len(fat) < 2 or any(f.get("coluna") not in por_nome for f in fat):
+                    erros.append(f"{nome}: interação '{col}' sem dois fatores existentes — o gerador "
+                                 f"descartaria o termo")
+                continue
+            if kind == "constante":
+                continue
+            if col not in por_nome:
+                erros.append(f"{nome}: termo sobre a coluna '{col}', que não existe — o gerador o "
+                             f"descartaria")
+                continue
+            espec_col = por_nome[col]
+            if kind == "temporal" and (espec_col.get("tipo") or "").lower() not in ("data", "datetime"):
+                erros.append(f"{nome}.{col}: termo 'temporal' sobre coluna que não é data — o efeito "
+                             f"seria linear. Para efeito não linear use 'faixas' ou 'categoria'.")
+            if kind == "faixas" and not termo.get("faixas"):
+                erros.append(f"{nome}.{col}: termo 'faixas' sem a lista de faixas")
+            if kind == "categoria":
+                ef = termo.get("efeitos") or {}
+                if not ef:
+                    erros.append(f"{nome}.{col}: termo 'categoria' sem 'efeitos' por valor")
+                    continue
+                chaves = {str(k).strip().lower() for k in ef}
+                cats = {str(c.get("valor")).strip().lower() for c in (espec_col.get("categorias") or [])}
+                if cats and chaves - cats:
+                    erros.append(f"{nome}.{col}: efeitos para valores que a coluna não tem "
+                                 f"{sorted(chaves - cats)} (valores da coluna: {sorted(cats)})")
+                parte = ((espec_col.get("derivada_de") or {}).get("parte") or "").lower()
+                rotulos_esperados = {"dia_semana": 7, "mes": 12}.get(parte)
+                textuais = any(not re.fullmatch(r"-?\d+(\.0+)?", k) for k in chaves)
+                if rotulos_esperados and textuais and len(espec_col.get("categorias") or []) != rotulos_esperados:
+                    erros.append(f"{nome}.{col}: derivada de data com efeitos por rótulo, mas sem os "
+                                 f"{rotulos_esperados} rótulos em 'categorias' — sairia número e os "
+                                 f"efeitos não casariam")
+
         por_coluna: Dict[str, Dict[str, float]] = {}
         for termo in list(alvo.get("formula") or []):
-            col = termo.get("coluna")
+            fat = termo.get("fatores") or []
+            col = " × ".join(f.get("coluna", "?") for f in fat) if fat else termo.get("coluna")
             if not col:
                 continue
             agr = por_coluna.setdefault(col, {"soma_abs": 0.0, "imp": 0.0, "termos": 0})
             agr["soma_abs"] += abs(float(termo.get("coeficiente") or 0))
+            agr["soma_abs"] += sum(abs(float(v or 0)) for v in (termo.get("efeitos") or {}).values())
+            agr["soma_abs"] += sum(abs(float(f.get("efeito") or 0)) for f in (termo.get("faixas") or []))
+            if fat and not termo.get("coeficiente"):
+                agr["soma_abs"] += 1.0  # interação sem coeficiente: efeito positivo unitário
             agr["imp"] = max(agr["imp"], float(termo.get("importancia") or 0))
             agr["termos"] += 1
         for col, agr in por_coluna.items():
-            if agr["soma_abs"] == 0 and agr["imp"] >= 3:
+            if agr["soma_abs"] == 0 and agr["imp"] >= 2:
                 erros.append(
                     f"{nome}.{col}: declarado com importância {agr['imp']:.0f} mas todos os "
                     f"{int(agr['termos'])} termo(s) têm coeficiente zero. A especificação se "
@@ -462,6 +629,14 @@ def _coluna(rng, col, n, df):
     if tipo in ("data", "datetime"):
         ini = pd.Timestamp(p.get("inicio") or "2025-01-01")
         fim = pd.Timestamp(p.get("fim") or "2025-06-30")
+        h0, h1 = p.get("hora_min"), p.get("hora_max")
+        if tipo == "datetime" and h0 is not None and h1 is not None:
+            # Janela do dia em que o evento acontece (expediente, turno): sortear o
+            # instante no dia inteiro poria despachos às três da manhã.
+            dias = rng.integers(0, max(1, (fim.normalize() - ini.normalize()).days + 1), size=n)
+            minutos = rng.integers(int(h0) * 60, (int(h1) + 1) * 60, size=n)
+            return (ini.normalize() + pd.to_timedelta(dias, unit="D")
+                    + pd.to_timedelta(minutos, unit="m"))
         segundos = rng.integers(0, max(1, int((fim - ini).total_seconds())), size=n)
         s = ini + pd.to_timedelta(segundos, unit="s")
         return s.floor("min") if tipo == "datetime" else s.normalize()
@@ -480,8 +655,13 @@ def _coluna(rng, col, n, df):
     if dist == "normal":
         v = rng.normal(float(p.get("media") or 0), max(1e-9, float(p.get("desvio") or 1)), n)
     elif dist == "lognormal":
+        # Média e desvio vêm na escala da própria coluna (kg, km, R$), que é como a
+        # especificação os declara. Usá-los direto como parâmetros do logaritmo fazia um
+        # desvio de 1,2 kg virar uma cauda de dezenas de quilos. Casamento de momentos:
         media = max(1e-9, float(p.get("media") or 1))
-        v = rng.lognormal(np.log(media), max(1e-9, float(p.get("desvio") or 0.4)), n)
+        cv = float(p.get("desvio")) / media if p.get("desvio") else 0.4
+        sigma = float(np.sqrt(np.log(1.0 + cv ** 2)))
+        v = rng.lognormal(np.log(media) - sigma ** 2 / 2, max(1e-9, sigma), n)
     elif dist == "poisson":
         v = rng.poisson(max(1e-9, float(p.get("lambda") or p.get("media") or 1)), n).astype(float)
     else:
@@ -494,6 +674,132 @@ def _coluna(rng, col, n, df):
     if tipo == "int":
         return np.rint(v).astype(int)
     return np.round(v, int(col.get("decimais") if col.get("decimais") is not None else 2))
+
+
+def _chave(v):
+    """Forma canônica de um valor para casar com as chaves da especificação:
+    16, 16.0 e "16" são o mesmo valor; "Centro" e "centro" também."""
+    if isinstance(v, (float, np.floating)) and float(v).is_integer():
+        v = int(v)
+    return str(v).strip().lower()
+
+
+def _coluna_condicionada(rng, col, df):
+    """Coluna cuja distribuição depende do valor de outra (peso conforme o veículo).
+    Cada grupo da coluna de referência é gerado com a sua variante de parâmetros."""
+    cond = col["condicionada_a"]
+    ref = pd.Series(df[cond["coluna"]]).map(_chave).to_numpy()
+    variantes = {_chave(k): v for k, v in (cond.get("variantes") or {}).items()}
+    numerica = (col.get("tipo") or "") in ("int", "float")
+    saida = np.full(len(df), np.nan) if numerica else np.empty(len(df), dtype=object)
+    for valor in pd.unique(ref):
+        mascara = ref == valor
+        espec = {k: v for k, v in col.items() if k != "condicionada_a"}
+        var = variantes.get(valor) or {}
+        if var.get("parametros"):
+            espec["parametros"] = {**(col.get("parametros") or {}), **var["parametros"]}
+        if var.get("categorias"):
+            espec["categorias"] = var["categorias"]
+        if var.get("distribuicao"):
+            espec["distribuicao"] = var["distribuicao"]
+        saida[mascara] = _coluna(rng, espec, int(mascara.sum()), df)
+    if (col.get("tipo") or "") == "int":
+        return np.rint(saida).astype(int)
+    return saida
+
+
+class _Campos(dict):
+    """Preenche {coluna} nos modelos de texto; marcador desconhecido fica como está."""
+    def __missing__(self, k):
+        return "{" + k + "}"
+
+
+def _texto_do_valor(v):
+    if isinstance(v, (float, np.floating)):
+        return f"{float(v):.1f}".replace(".", ",")
+    return str(v).replace("_", " ")
+
+
+def _coluna_texto(rng, col, df):
+    """Texto livre escolhido por regras: a primeira regra cuja condição casa com a linha
+    sorteia um dos modelos. É o que faz o relato falar de chuva quando choveu — um texto
+    sorteado sem olhar a linha contradiria as outras colunas e inutilizaria qualquer
+    busca ou análise feita sobre ele."""
+    regras = (col.get("textos") or {}).get("regras") or []
+    n = len(df)
+    saida = np.empty(n, dtype=object)
+    livre = np.ones(n, dtype=bool)
+    for regra in regras:
+        modelos = [str(m) for m in (regra.get("modelos") or []) if str(m).strip()]
+        if not modelos:
+            continue
+        mascara = livre.copy()
+        for c, v in (regra.get("quando") or {}).items():
+            if c not in df.columns:
+                mascara[:] = False
+                break
+            if isinstance(v, dict):
+                # condição por faixa: {"min": 18} — "noturna" só a partir das 18h
+                x = pd.to_numeric(df[c], errors="coerce").to_numpy(dtype=float)
+                lo = -np.inf if v.get("min") is None else float(v["min"])
+                hi = np.inf if v.get("max") is None else float(v["max"])
+                mascara &= (x >= lo) & (x <= hi)
+            elif isinstance(v, list):
+                # condição por lista de valores: {"dia_semana": ["sabado", "domingo"]}
+                aceitos = {_chave(x) for x in v}
+                mascara &= pd.Series(df[c]).map(_chave).isin(aceitos).to_numpy()
+            else:
+                mascara &= pd.Series(df[c]).map(_chave).to_numpy() == _chave(v)
+        idx = np.flatnonzero(mascara)
+        if len(idx) == 0:
+            continue
+        escolhas = rng.integers(0, len(modelos), size=len(idx))
+        registros = df.iloc[idx].to_dict("records")
+        for j in range(len(idx)):
+            campos = _Campos({k: _texto_do_valor(v) for k, v in registros[j].items()})
+            try:
+                saida[idx[j]] = modelos[escolhas[j]].format_map(campos)
+            except (ValueError, IndexError, KeyError):
+                saida[idx[j]] = modelos[escolhas[j]]
+        livre[idx] = False
+    return saida
+
+
+_PARTES = {"ano": "year", "mes": "month", "dia": "day",
+           "dia_semana": "dayofweek", "hora": "hour", "semana": "isocalendar"}
+
+
+def _derivar_data(df, col):
+    """Parte de uma data (mês, dia da semana, hora), calculada da origem — nunca sorteada.
+    Com rótulos declarados na ordem do calendário, devolve o rótulo em vez do número."""
+    d = col.get("derivada_de") or {}
+    origem = pd.to_datetime(df[d["coluna"]], errors="coerce")
+    nome_parte = (d.get("parte") or "").lower()
+    parte = _PARTES.get(nome_parte)
+    if parte == "isocalendar":
+        return origem.dt.isocalendar().week.astype(int)
+    if not parte:
+        return None
+    valores = getattr(origem.dt, parte)
+    rotulos = [c.get("valor") for c in (col.get("categorias") or [])]
+    esperado = {"dia_semana": 7, "mes": 12}.get(nome_parte)
+    if esperado and len(rotulos) == esperado:
+        base = 1 if nome_parte == "mes" else 0
+        return [rotulos[int(x) - base] if pd.notna(x) else None for x in valores]
+    return valores.astype(int)
+
+
+def _valor_fator(serie, fator):
+    """Fator de uma interação: indicador (valores ou faixa) ou o próprio valor numérico."""
+    if fator.get("valores"):
+        alvo = {_chave(v) for v in fator["valores"]}
+        return pd.Series(serie).map(lambda v: 1.0 if _chave(v) in alvo else 0.0).to_numpy(dtype=float)
+    x = pd.to_numeric(serie, errors="coerce").fillna(0).to_numpy(dtype=float)
+    if fator.get("min") is not None or fator.get("max") is not None:
+        lo = -np.inf if fator.get("min") is None else float(fator["min"])
+        hi = np.inf if fator.get("max") is None else float(fator["max"])
+        return ((x >= lo) & (x <= hi)).astype(float)
+    return x
 
 
 def _aplicar_formula(rng, df, alvo):
@@ -522,10 +828,39 @@ def _aplicar_formula(rng, df, alvo):
         coef = float(termo.get("coeficiente") or 0)
         col = termo.get("coluna")
         kind = (termo.get("termo") or "").lower()
-        if kind == "constante" or not col:
+        if kind == "constante" or (not col and not termo.get("fatores")):
             y += coef
             continue
+        imp_termo = float(termo.get("importancia") or 0)
+        # Interação: o efeito de um fator depende do outro (chuva pesa mais em trajeto longo).
+        if termo.get("fatores"):
+            fatores = termo["fatores"]
+            if any(f.get("coluna") not in df.columns for f in fatores):
+                continue
+            produto = np.ones(n)
+            for f in fatores:
+                produto = produto * _valor_fator(df[f["coluna"]], f)
+            efeitos.append({"coluna": " × ".join(f["coluna"] for f in fatores),
+                            "valores": (coef if coef else 1.0) * produto, "importancia": imp_termo})
+            continue
         if col not in df.columns:
+            continue
+        # Efeito declarado valor a valor: categorias sem ordem natural (região, dia da
+        # semana) não admitem um coeficiente único — cada valor tem o seu deslocamento.
+        if termo.get("efeitos"):
+            mapa = {_chave(k): float(v or 0) for k, v in termo["efeitos"].items()}
+            efeito = pd.Series(df[col]).map(lambda v: mapa.get(_chave(v), 0.0)).to_numpy(dtype=float)
+            efeitos.append({"coluna": col, "valores": efeito, "importancia": imp_termo})
+            continue
+        # Efeito não linear por faixa (horário de pico, faixa etária).
+        if termo.get("faixas"):
+            x = pd.to_numeric(df[col], errors="coerce").to_numpy(dtype=float)
+            efeito = np.zeros(n)
+            for fx in termo["faixas"]:
+                lo = -np.inf if fx.get("min") is None else float(fx["min"])
+                hi = np.inf if fx.get("max") is None else float(fx["max"])
+                efeito = efeito + np.where((x >= lo) & (x <= hi), float(fx.get("efeito") or 0), 0.0)
+            efeitos.append({"coluna": col, "valores": efeito, "importancia": imp_termo})
             continue
         serie = df[col]
         # pd.api.types em vez de np.issubdtype: este último quebra com dtypes
@@ -768,6 +1103,10 @@ def gerar_arquivo(arq, gerados):
     for col in arq["colunas"]:
         if (col.get("papel") or "") == "alvo" or col.get("derivada_de") or col["nome"] in df.columns:
             continue
+        # texto depende das outras colunas (e às vezes do alvo); condicionada depende da
+        # coluna de referência — ambas são geradas depois, quando o que leem já existe
+        if (col.get("tipo") or "").lower() == "texto" or col.get("condicionada_a"):
+            continue
         df[col["nome"]] = _coluna(rng, col, n, df)
 
     # Memória temporal não é privilégio do alvo. Uma feature que também é grandeza
@@ -817,20 +1156,27 @@ def gerar_arquivo(arq, gerados):
 
     # Colunas derivadas de data: calculadas a partir da origem, nunca sorteadas.
     # Um "mês" que não bate com a data quebra a coerência interna do dataset.
-    _PARTES = {"ano": "year", "mes": "month", "dia": "day",
-               "dia_semana": "dayofweek", "hora": "hour", "semana": "isocalendar"}
     for col in arq["colunas"]:
         d = col.get("derivada_de")
         if not d or not d.get("coluna") or d["coluna"] not in df.columns:
             continue
         if str(d.get("parte") or "").startswith(("lag_", "media_movel_")):
             continue  # dependem do alvo: calculadas depois que ele existe
-        origem = pd.to_datetime(df[d["coluna"]], errors="coerce")
-        parte = _PARTES.get((d.get("parte") or "").lower())
-        if parte == "isocalendar":
-            df[col["nome"]] = origem.dt.isocalendar().week.astype(int)
-        elif parte:
-            df[col["nome"]] = getattr(origem.dt, parte).astype(int)
+        valores = _derivar_data(df, col)
+        if valores is not None:
+            df[col["nome"]] = valores
+
+    # Colunas condicionadas a outra: em passadas, para que uma possa depender de outra.
+    pendentes = [c for c in arq["colunas"] if c.get("condicionada_a")
+                 and c["nome"] not in df.columns and (c.get("papel") or "") != "alvo"]
+    while pendentes:
+        prontas = [c for c in pendentes if c["condicionada_a"].get("coluna") in df.columns]
+        if not prontas:
+            raise SystemExit("colunas condicionadas a referências inexistentes: "
+                             + ", ".join(c["nome"] for c in pendentes))
+        for c in prontas:
+            df[c["nome"]] = _coluna_condicionada(rng, c, df)
+        pendentes = [c for c in pendentes if c not in prontas]
 
     fk = arq.get("chave_estrangeira")
     if fk and fk.get("referencia_arquivo") in gerados:
@@ -964,6 +1310,12 @@ def gerar_arquivo(arq, gerados):
             else:
                 df[alvo["coluna"]] = np.round(y, int(especificacao.get("decimais") or 2))
 
+    # Texto livre por último entre as colunas: as regras leem as demais — inclusive o alvo,
+    # quando o texto é um relato escrito depois do evento.
+    for col in arq["colunas"]:
+        if (col.get("tipo") or "").lower() == "texto" and col["nome"] not in df.columns:
+            df[col["nome"]] = _coluna_texto(rng, col, df)
+
     # Relações que o domínio não permite violar (entregas <= pedidos, pagos <= devidos).
     for restricao in (arq.get("restricoes") or []):
         c, ref = restricao.get("coluna"), restricao.get("referencia")
@@ -1036,7 +1388,17 @@ def gerar_arquivo(arq, gerados):
     temporais = [c["nome"] for c in arq["colunas"] if c.get("tipo") in ("data", "datetime") and c["nome"] in df.columns]
     if temporais:
         df = df.sort_values(temporais[0]).reset_index(drop=True)
-    return df
+        # Identificador sequencial acompanha a ordem do tempo, como num sistema real: um
+        # id alto despachado antes de um id baixo denuncia dado sorteado. factorize numera
+        # pela ordem de aparição, então as duplicatas plantadas mantêm o mesmo id.
+        pk = arq.get("chave_primaria")
+        espec_pk = next((c for c in arq["colunas"] if c["nome"] == pk), {})
+        if pk in df.columns and (espec_pk.get("tipo") == "id"
+                                 or (espec_pk.get("distribuicao") or "") == "sequencial"):
+            df[pk] = pd.factorize(df[pk])[0] + 1
+    # A ordem de geração segue as dependências; o arquivo segue a ordem declarada.
+    ordem = [c["nome"] for c in arq["colunas"] if c["nome"] in df.columns]
+    return df[ordem + [c for c in df.columns if c not in ordem]]
 
 
 def main():
@@ -1128,6 +1490,28 @@ def validar(spec: Dict[str, Any], pasta: Path) -> Tuple[bool, List[str]]:
                     ok = False
                 else:
                     msgs.append(f"ok: integridade referencial {arq['nome']}.{col} → {fk['referencia_arquivo']}")
+
+        # Coluna declarada com várias categorias que saiu com um valor só, e texto que ficou
+        # vazio além do defeito declarado: sintomas de algo que o gerador não executou.
+        nulos_decl = {x.get("coluna"): float(x.get("proporcao") or 0)
+                      for x in ((arq.get("defeitos") or {}).get("nulos") or [])}
+        for col in arq["colunas"]:
+            nome_c = col["nome"]
+            if nome_c not in df.columns:
+                continue
+            if len(col.get("categorias") or []) >= 2 and df[nome_c].nunique() <= 1:
+                msgs.append(f"ERRO: {arq['nome']}.{nome_c} declara {len(col['categorias'])} categorias "
+                            f"mas saiu constante ({df[nome_c].dropna().unique()[:1]})")
+                ok = False
+            if (col.get("tipo") or "").lower() == "texto":
+                excesso = float(df[nome_c].isna().mean()) - nulos_decl.get(nome_c, 0.0)
+                distintos = int(df[nome_c].nunique())
+                if excesso > 0.02:
+                    msgs.append(f"ERRO: {arq['nome']}.{nome_c} tem {excesso:.1%} de linhas sem texto além "
+                                f"do defeito declarado — nenhuma regra de texto casou com elas")
+                    ok = False
+                else:
+                    msgs.append(f"ok: {nome_c} com {distintos} textos distintos")
 
         # Nenhuma feature pode ser o índice da linha disfarçado. Uma coluna que só cresce
         # acompanha o tempo e passa a "prever" qualquer alvo que tenha tendência — a análise
@@ -1259,6 +1643,11 @@ def validar(spec: Dict[str, Any], pasta: Path) -> Tuple[bool, List[str]]:
             c = termo.get("coluna")
             if not c:
                 continue
+            # efeitos por valor e por faixa não são lineares: correlação de Pearson os
+            # avaliaria errado (um pico no meio do dia tem correlação quase nula). São
+            # conferidos adiante, grupo a grupo. Interações não têm coluna própria.
+            if termo.get("efeitos") or termo.get("faixas") or termo.get("fatores"):
+                continue
             agr = por_coluna.setdefault(c, {"coef": 0.0, "imp": 0.0})
             agr["coef"] += float(termo.get("coeficiente") or 0)
             agr["imp"] = max(agr["imp"], float(termo.get("importancia") or 0))
@@ -1272,7 +1661,9 @@ def validar(spec: Dict[str, Any], pasta: Path) -> Tuple[bool, List[str]]:
             if not pd.api.types.is_numeric_dtype(df[c]):
                 continue
             sub = df[[c, alvo_col]].dropna()
-            if len(sub) < 50 or sub[c].nunique() < 3:
+            # binárias (0/1) entram: a correlação ponto-bisserial é legítima, e excluí-las
+            # tirava da conferência justamente fatores dominantes como "choveu ou não"
+            if len(sub) < 50 or sub[c].nunique() < 2:
                 continue
             r = float(sub[c].corr(sub[alvo_col]))
             if np.isnan(r):
@@ -1303,6 +1694,57 @@ def validar(spec: Dict[str, Any], pasta: Path) -> Tuple[bool, List[str]]:
                 ok = False
             else:
                 msgs.append(f"ok: {c} ↔ {alvo_col} r={r:+.2f} (coef {coef:+.2f}, importância {imp:.0f})")
+
+        # Efeitos declarados valor a valor (região, dia da semana): a ORDEM das médias do
+        # alvo por categoria tem de acompanhar a ordem declarada, e a diferença entre as
+        # categorias (razão de correlação, eta) tem de ser visível na proporção da importância.
+        def _ch(v):
+            if isinstance(v, (float, np.floating)) and float(v).is_integer():
+                v = int(v)
+            return str(v).strip().lower()
+        for termo in (alvo.get("formula") or []):
+            ef, fx, c = termo.get("efeitos"), termo.get("faixas"), termo.get("coluna")
+            if not (ef or fx) or c not in df.columns or not pd.api.types.is_numeric_dtype(df[alvo_col]):
+                continue
+            imp = float(termo.get("importancia") or 0)
+            sub = df[[c, alvo_col]].dropna()
+            if ef:
+                chave = sub[c].map(_ch)
+                declarados = {_ch(k): float(v or 0) for k, v in ef.items()}
+            else:
+                # cada linha é rotulada pela faixa em que cai; fora de todas, efeito zero
+                x = pd.to_numeric(sub[c], errors="coerce")
+                chave = pd.Series("fora", index=sub.index)
+                declarados = {"fora": 0.0}
+                for i, f in enumerate(fx):
+                    lo = -np.inf if f.get("min") is None else float(f["min"])
+                    hi = np.inf if f.get("max") is None else float(f["max"])
+                    dentro = (x >= lo) & (x <= hi) & (chave == "fora")
+                    chave[dentro] = f"faixa{i}"
+                    declarados[f"faixa{i}"] = float(f.get("efeito") or 0)
+            medias = sub[alvo_col].groupby(chave).mean()
+            comuns = [k for k in medias.index if k in declarados]
+            if len(comuns) < 2 or len({declarados[k] for k in comuns}) < 2:
+                continue
+            rho = float(pd.Series([declarados[k] for k in comuns]).corr(
+                pd.Series([medias[k] for k in comuns]), method="spearman"))
+            total = float(((sub[alvo_col] - sub[alvo_col].mean()) ** 2).sum()) or 1.0
+            entre = float((sub.groupby(chave)[alvo_col].count()
+                           * (medias - sub[alvo_col].mean()) ** 2).sum())
+            eta = (entre / total) ** 0.5
+            observados.append({"coluna": c, "coef": 1.0, "r": eta, "importancia": imp})
+            limiar = max(0.04, CORRELACAO_MINIMA * (imp / 3.0))
+            if imp >= 2 and (np.isnan(rho) or rho < 0.5):
+                msgs.append(f"ERRO: {c} — a ordem das médias de {alvo_col} por categoria não acompanha "
+                            f"os efeitos declarados (Spearman {rho:+.2f})")
+                ok = False
+            elif imp >= 2 and eta < limiar:
+                msgs.append(f"ERRO: efeito ausente — {c} tem importância {imp:.0f}, mas as categorias "
+                            f"quase não diferem em {alvo_col} (eta {eta:.2f}; mínimo {limiar:.2f})")
+                ok = False
+            else:
+                msgs.append(f"ok: {c} ↔ {alvo_col} eta={eta:.2f}, ordem das categorias "
+                            f"coerente (Spearman {rho:+.2f}, importância {imp:.0f})")
 
         # coerência entre a importância declarada e a força observada
         com_imp = [o for o in observados if o["importancia"] > 0]
@@ -1413,6 +1855,39 @@ def validar(spec: Dict[str, Any], pasta: Path) -> Tuple[bool, List[str]]:
 
         # o alvo tem sinal aprendível?
         tarefa = (alvo.get("tipo_tarefa") or "").lower()
+
+        # Classificação resolvida por uma regra de uma coluna só ("se choveu, atrasou")
+        # dispensa modelo, comparação e escolha de limiar — o exercício perde a razão de
+        # existir. Mede-se a acurácia da melhor regra de uma coluna (maioria por valor, com
+        # numéricas contínuas em decis) contra a linha de base da classe majoritária.
+        if tarefa == "classificacao" and df[alvo_col].nunique() == 2:
+            yb = df[alvo_col]
+            base = float(max(yb.mean(), 1 - yb.mean()))
+            features = [x["nome"] for x in arq["colunas"]
+                        if (x.get("papel") or "").lower() == "feature" and x["nome"] in df.columns]
+            melhor_regra = (None, 0.0)
+            for c in features:
+                x = df[c]
+                if pd.api.types.is_numeric_dtype(x) and x.nunique() > 20:
+                    x = pd.qcut(x.rank(method="first"), 10, labels=False)
+                sub = pd.DataFrame({"x": x, "y": yb}).dropna()
+                if sub.empty:
+                    continue
+                acertos = sub.groupby("x")["y"].agg(lambda s: max(s.sum(), len(s) - s.sum())).sum()
+                acc = float(acertos / len(sub))
+                if acc > melhor_regra[1]:
+                    melhor_regra = (c, acc)
+            c_m, acc_m = melhor_regra
+            if c_m is not None:
+                ganho = (acc_m - base) / (1 - base) if base < 1 else 0.0
+                if acc_m >= 0.95 or ganho >= 0.8:
+                    msgs.append(f"ERRO: uma regra só com '{c_m}' acerta {acc_m:.1%} de {alvo_col} "
+                                f"(linha de base {base:.1%}) — o alvo é separável por uma coluna")
+                    ok = False
+                else:
+                    msgs.append(f"ok: melhor regra de uma coluna ('{c_m}') acerta {acc_m:.1%} "
+                                f"(linha de base {base:.1%}) — nenhuma coluna resolve o alvo sozinha")
+
         if tarefa == "classificacao":
             prop = df[alvo_col].mean()
             if prop <= 0.01 or prop >= 0.99:
@@ -1673,8 +2148,16 @@ def resumo_factual(spec: Dict[str, Any], pasta: Path) -> str:
                               f"calculada do histórico, ausente nas primeiras linhas de cada entidade")
         alvo = (arq.get("alvo") or {}).get("coluna")
         if alvo and alvo in df.columns:
-            linhas.append(f"  Alvo '{alvo}': min {df[alvo].min():.0f}, max {df[alvo].max():.0f}, "
-                          f"média {df[alvo].mean():.0f}")
+            if df[alvo].dropna().nunique() == 2:
+                pos = float(df[alvo].mean())
+                linhas.append(f"  Alvo '{alvo}' (binário): classe positiva em {pos:.1%} dos registros "
+                              f"({int(df[alvo].sum())} de {int(df[alvo].notna().sum())})")
+            else:
+                linhas.append(f"  Alvo '{alvo}': min {df[alvo].min():.0f}, max {df[alvo].max():.0f}, "
+                              f"média {df[alvo].mean():.0f}")
+        dup = int(df.duplicated().sum())
+        if dup:
+            linhas.append(f"  Linhas duplicadas por inteiro: {dup} ({dup/len(df):.1%})")
         linhas.append("")
     return chr(10).join(linhas)
 
@@ -1815,6 +2298,10 @@ def main():
     ap.add_argument("--semente", type=int, default=42)
     ap.add_argument("--dry-run", action="store_true",
                     help="Gera e valida, mas NÃO altera a prova.")
+    ap.add_argument("--usar-spec", action="store_true",
+                    help="Reaproveita a especificação gravada em dataset_spec.json (pula a Fase 1). "
+                         "Use depois de um --dry-run conferido: sem isto, a execução real pede "
+                         "outra especificação ao modelo e gera uma base diferente da conferida.")
     args = ap.parse_args()
     load_dotenv()
 
@@ -1842,10 +2329,18 @@ def main():
         return
     print(f"[4.7] {len(blocos)} bloco(s) de dados encontrado(s) na prova.")
 
-    print("[Fase 1] Pedindo especificação ao modelo...")
-    raw = _chat(None, MODEL_TURBO, system_prompt_especificacao(),
-                user_prompt_especificacao(txt, blocos, txt, args.linhas))
-    spec = _parse_json_tolerante(raw)
+    spec_path = projeto / "dataset_spec.json"
+    if args.usar_spec:
+        if not spec_path.exists():
+            print(f"[ERRO] --usar-spec sem {spec_path}. Rode antes um --dry-run.")
+            sys.exit(2)
+        print(f"[Fase 1] Reaproveitando a especificação de {spec_path.name}...")
+        spec = json.loads(spec_path.read_text(encoding="utf-8"))
+    else:
+        print("[Fase 1] Pedindo especificação ao modelo...")
+        raw = _chat(None, MODEL_TURBO, system_prompt_especificacao(),
+                    user_prompt_especificacao(txt, blocos, txt, args.linhas))
+        spec = _parse_json_tolerante(raw)
     if not spec or not spec.get("arquivos"):
         print("[ERRO] Não consegui obter uma especificação válida. TXT preservado.")
         sys.exit(2)
@@ -1861,6 +2356,10 @@ def main():
     if erros_spec:
         print("[ERRO] A especificação é internamente inconsistente. TXT preservado.")
         sys.exit(2)
+    # Gravada sempre: é o que permite conferir um --dry-run e aplicar exatamente a mesma
+    # base depois (--usar-spec), ou corrigir à mão um detalhe de domínio antes de aplicar.
+    spec_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"  → especificação gravada em {spec_path.name}")
 
     print("[Fase 2] Gerando o script determinístico...")
     codigo = gerar_codigo(spec, args.carreira, args.nivel, args.semente)
