@@ -262,8 +262,10 @@ def montar_instrucoes(carreira: str, nivel: int, base: Path) -> str:
     if is_cases:
         L.append(
             "- prova_pratica.txt traz um case único de análise, estruturado em etapas\n"
-            "  (entregáveis documentais: pareceres, matrizes, diagramas). Não há código\n"
-            "  nem datasets. Revise o conteúdo normalmente."
+            "  (entregáveis documentais: pareceres, matrizes, diagramas). A pessoa aluna\n"
+            "  não escreve nem executa código e não há datasets; trechos de código, tabelas\n"
+            "  ou logs que apareçam são artefatos para leitura e análise. Revise o conteúdo\n"
+            "  normalmente."
         )
     elif dataset_por_link:
         L.append(

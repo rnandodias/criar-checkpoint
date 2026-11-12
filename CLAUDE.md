@@ -24,6 +24,8 @@ Este projeto foi extraído/isolado a partir de dois projetos maiores do usuário
 
 A etapa **4.9** é o handoff pré-publicação: gera um documento de instruções para o coordenador (folha de seleção das 10 questões teóricas + pendências da prática extraídas dos relatórios de QA) e empacota provas + relatórios num ZIP. É determinística (não usa LLM) e **ciente do formato da prática** (`_detectar_formato_pratica` → cases vs projeto: não menciona datasets/CSV numa prova cases, e só cita relatórios de QA se os `.md` existirem no pacote); roda depois do QA e antes do upload. O coordenador revisa/aprova o ZIP e só então roda-se a Etapa 5.
 
+**Terceiro revisor (fluxo do usuário, desde Ciência de Dados v2 n2):** o ZIP da 4.9 NÃO vai direto ao coordenador. O usuário o passa antes a um **revisor externo com modelo mais sofisticado**, que faz varredura geral e tenta resolver as provas; só depois vai ao coordenador. Consequências: (a) o pipeline roda **completo** até a 4.9, incluindo 3.5 e 4.5 — o revisor externo é camada adicional, não substituto, e pular etapa é decisão do usuário, nunca do assistente; (b) na Etapa 5, os arquivos que o usuário devolver (editados pelo revisor e pelo coordenador) são a **fonte da verdade** — copie-os sobre `output/` com backup, confira as marcações estruturais que o uploader usa e não reverta edições do revisor sem perguntar.
+
 Cada script consome a saída do anterior. Os resumos são a **fonte única de verdade** para a geração das provas — nenhuma etapa posterior lê as transcrições diretamente.
 
 ## Stack
